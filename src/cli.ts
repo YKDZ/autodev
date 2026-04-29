@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// hello auto-dev
+
 import { logger } from "./shared/logger.js";
 import { runAudit } from "./cli/audit.js";
 import { runConfig } from "./cli/config.js";
