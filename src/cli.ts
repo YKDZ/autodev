@@ -1,3 +1,4 @@
+// Hello from autodev
 #!/usr/bin/env node
 
 // hello auto-dev
