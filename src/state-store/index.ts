@@ -1,0 +1,18 @@
+export {
+  ensureStateDirs,
+  saveWorkflowRun,
+  loadWorkflowRun,
+  listWorkflowRuns,
+  saveDecision,
+  loadDecision,
+  listDecisions,
+  saveCoordinatorState,
+  loadCoordinatorState,
+  saveSyncMappings,
+  loadSyncMappings,
+  registerWorkspace,
+  unregisterWorkspace,
+  findWorkspaceByIssueNumber,
+  listAllWorkspaces,
+  closeDb,
+} from "./state-store.js";
