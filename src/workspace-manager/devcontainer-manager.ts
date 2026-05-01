@@ -1,24 +1,58 @@
 /* oxlint-disable typescript-eslint/no-unsafe-type-assertion -- devcontainer CLI JSON and Docker error objects */
 import { execFileSync, execSync } from "node:child_process";
+import { basename } from "node:path";
 
 import { logger } from "../shared/logger.js";
 
+/** Container path where the decision socket directory is mounted inside devcontainers. */
+const DEVCONTAINER_SOCKET_DIR = "/var/run/auto-dev";
+
 export class DevcontainerManager {
-  constructor(_workspaceRoot: string) {
-    /* workspaceRoot kept for future use */
+  private readonly workspaceRoot: string;
+
+  constructor(workspaceRoot: string) {
+    this.workspaceRoot = workspaceRoot;
   }
 
   /**
    * Start a devcontainer for the given worktree path.
-   * Returns the container ID, or empty string if the container
+   * Returns { containerId, remoteWorkspaceFolder } or empty strings if the container
    * could not be started (caller should fall back to local execution).
+   *
+   * The decision socket dir (host: dirname of AUTO_DEV_SOCKET or /var/run/auto-dev)
+   * is bind-mounted into the devcontainer so agents can call `auto-dev request-decision`.
    */
-  start(worktreePath: string): string {
+  start(worktreePath: string): {
+    containerId: string;
+    remoteWorkspaceFolder: string;
+  } {
+    // Default: devcontainer mounts workspace at /workspaces/<basename>
+    const defaultRemoteFolder = `/workspaces/${basename(worktreePath)}`;
+
+    // The socket lives in workspaceRoot/tools/auto-dev/state/ which is bind-mounted
+    // at the SAME path on both the host and this container, so Docker daemon can
+    // bind-mount it into the devcontainer using that host path.
+    const hostSocketDir = `${this.workspaceRoot}/tools/auto-dev/state`;
+    const mountArg = `type=bind,source=${hostSocketDir},target=${DEVCONTAINER_SOCKET_DIR}`;
+    // Also mount the main repo's .git directory at the same absolute host path so
+    // the worktree's `.git` file pointer (gitdir: <workspaceRoot>/.git/worktrees/…)
+    // resolves correctly inside the container.
+    const mainGitDir = `${this.workspaceRoot}/.git`;
+    const gitMountArg = `type=bind,source=${mainGitDir},target=${mainGitDir}`;
+
     let output: string;
     try {
       output = execFileSync(
         "devcontainer",
-        ["up", "--workspace-folder", worktreePath],
+        [
+          "up",
+          "--workspace-folder",
+          worktreePath,
+          "--mount",
+          mountArg,
+          "--mount",
+          gitMountArg,
+        ],
         {
           encoding: "utf-8",
           stdio: ["ignore", "pipe", "pipe"],
@@ -26,12 +60,16 @@ export class DevcontainerManager {
       ).trim();
     } catch (err) {
       logger.warn(
-        `[auto-dev] Devcontainer up failed for ${worktreePath}, continuing without container: ${String(err)}`,
+        `[auto-dev] Devcontainer up failed for ${worktreePath}, trying direct docker run fallback: ${String(err)}`,
       );
-      return "";
+      return this.startFallbackContainer(
+        worktreePath,
+        defaultRemoteFolder,
+        hostSocketDir,
+      );
     }
 
-    // Parse JSON output to extract container ID
+    // Parse JSON output to extract containerId and remoteWorkspaceFolder
     // devcontainer up outputs JSON lines; look for the containerId field
     const lines = output.split("\n").filter(Boolean);
     for (const line of lines) {
@@ -39,7 +77,11 @@ export class DevcontainerManager {
         // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
         const parsed = JSON.parse(line) as Record<string, unknown>;
         if (parsed.containerId && typeof parsed.containerId === "string") {
-          return parsed.containerId;
+          const remoteWorkspaceFolder =
+            typeof parsed.remoteWorkspaceFolder === "string"
+              ? parsed.remoteWorkspaceFolder
+              : defaultRemoteFolder;
+          return { containerId: parsed.containerId, remoteWorkspaceFolder };
         }
       } catch {
         // Not a JSON line, skip
@@ -58,21 +100,93 @@ export class DevcontainerManager {
     ).trim();
 
     if (dockerOutput) {
-      // Tag the container with autodev labels
-      try {
-        execSync(
-          `docker label ${dockerOutput} autodev-worktree="${worktreePath}" autodev-run-id="unknown"`,
-          { stdio: "ignore" },
-        );
-      } catch {
-        /* best-effort */
-      }
-      return dockerOutput;
+      return {
+        containerId: dockerOutput,
+        remoteWorkspaceFolder: defaultRemoteFolder,
+      };
     }
 
     throw new Error(
       `Could not determine container ID from devcontainer up output:\n${output}`,
     );
+  }
+
+  /**
+   * Fallback: when devcontainer CLI fails (e.g. network unavailable for feature pull),
+   * start a plain Docker container using the autodev image which already has
+   * all required tooling (claude, auto-dev, git, pnpm, etc).
+   *
+   * The workspace is mounted at /workspaces/<basename> to match devcontainer convention.
+   */
+  private startFallbackContainer(
+    worktreePath: string,
+    remoteWorkspaceFolder: string,
+    hostSocketDir: string,
+  ): { containerId: string; remoteWorkspaceFolder: string } {
+    const worktreeName = basename(worktreePath);
+    const containerName = `autodev-worktree-${worktreeName}`;
+
+    // Stop and remove any existing container with the same name
+    try {
+      execSync(`docker rm -f ${containerName}`, { stdio: "ignore" });
+    } catch {
+      /* ignore if not found */
+    }
+
+    // Choose image: prefer existing devcontainer image if available, else autodev:latest
+    // Look for any vsc-autodev-* image (built from the same Dockerfile)
+    let imageToUse = "autodev:latest";
+    try {
+      const images = execFileSync(
+        "docker",
+        [
+          "images",
+          "--format",
+          "{{.Repository}}:{{.Tag}}",
+          "--filter",
+          "reference=vsc-autodev-*",
+        ],
+        { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+      ).trim();
+      const firstImage = images.split("\n").find((l) => l.trim());
+      if (firstImage) imageToUse = firstImage.trim();
+    } catch {
+      /* use default */
+    }
+
+    logger.info(
+      `[auto-dev] Starting fallback container for ${worktreePath} using image ${imageToUse}`,
+    );
+
+    // Run detached container with worktree and socket mounts, keeping it alive.
+    // Also mount the main repo's .git directory at the same absolute host path so
+    // that the worktree's `.git` file pointer (gitdir: <workspaceRoot>/.git/worktrees/…)
+    // resolves correctly inside the container.
+    const mainGitDir = `${this.workspaceRoot}/.git`;
+    const containerId = execFileSync(
+      "docker",
+      [
+        "run",
+        "-d",
+        "--name",
+        containerName,
+        "--mount",
+        `type=bind,source=${worktreePath},target=${remoteWorkspaceFolder}`,
+        "--mount",
+        `type=bind,source=${hostSocketDir},target=${DEVCONTAINER_SOCKET_DIR}`,
+        "--mount",
+        `type=bind,source=${mainGitDir},target=${mainGitDir}`,
+        "-w",
+        remoteWorkspaceFolder,
+        imageToUse,
+        "sleep",
+        "infinity",
+      ],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+    ).trim();
+
+    logger.info(`[auto-dev] Fallback container started: ${containerId}`);
+    return { containerId, remoteWorkspaceFolder };
   }
 
   /**

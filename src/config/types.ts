@@ -12,6 +12,7 @@ export interface AutoDevConfig {
   pollIntervalSec: number;
   maxDecisionPerRun: number;
   maxImplCycles: number;
+  maxConcurrentRuns: number;
 }
 
 export const DEFAULT_CONFIG: AutoDevConfig = {
@@ -46,4 +47,5 @@ export const DEFAULT_CONFIG: AutoDevConfig = {
   pollIntervalSec: 30,
   maxDecisionPerRun: 20,
   maxImplCycles: 5,
+  maxConcurrentRuns: 3,
 };

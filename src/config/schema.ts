@@ -12,6 +12,7 @@ export const AutoDevConfigSchema = z.object({
   pollIntervalSec: z.int().min(10).max(3600).default(30),
   maxDecisionPerRun: z.int().min(1).max(100).default(20),
   maxImplCycles: z.int().min(1).max(50).default(5),
+  maxConcurrentRuns: z.int().min(1).max(20).default(3),
 });
 
 export type AutoDevConfig = z.infer<typeof AutoDevConfigSchema>;

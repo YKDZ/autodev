@@ -1,0 +1,47 @@
+# Test docker-compose for YKDZ/autodev
+# Usage: docker compose -f docker-compose.test.yml up -d
+#
+# IMPORTANT: The workspace data directory uses the SAME path on host and in container
+# (/opt/dev/autodev/autodev-data) so that devcontainer CLI can bind-mount worktree
+# paths correctly (Docker daemon uses host paths for bind mounts).
+
+services:
+  autodev:
+    image: autodev:latest
+    container_name: autodev-test
+    restart: unless-stopped
+
+    ports:
+      - "2224:22"
+
+    environment:
+      # GitHub App credentials
+      GITHUB_APP_ID: "3532408"
+      GITHUB_APP_INSTALLATION_ID: "127819771"
+      GITHUB_APP_PRIVATE_KEY_PATH: "/run/secrets/github-app-key.pem"
+      GITHUB_REPOSITORY: "YKDZ/autodev"
+
+      # Anthropic API (forwarded to devcontainer agents)
+      ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic"
+      ANTHROPIC_API_KEY: "sk-527f57034ceb4c84bf500d3137e9c4e7"
+
+      # AutoDev configuration
+      AUTO_DEV_ALLOWED_USERS: "YKDZ"
+      AUTO_DEV_POLL_INTERVAL_SEC: "15"
+      AUTO_DEV_DEFAULT_AGENT: "full-pipeline"
+
+      # Workspace root: same path on host AND in container so devcontainer bind-mounts work
+      AUTO_DEV_WORKSPACE_ROOT: "/opt/dev/autodev/autodev-data"
+
+    volumes:
+      # Docker socket for devcontainer management
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Workspace data: MUST use same absolute path on host and in container
+      - /opt/dev/autodev/autodev-data:/opt/dev/autodev/autodev-data
+      # GitHub App private key (read-only)
+      - /opt/dev/autodev/ykdz-s-autodevbot.2026-04-28.private-key.pem:/run/secrets/github-app-key.pem:ro
+      # Persist SSH host keys
+      - autodev-test-ssh:/etc/ssh
+
+volumes:
+  autodev-test-ssh:

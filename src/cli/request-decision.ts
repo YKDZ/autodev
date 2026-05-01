@@ -22,11 +22,23 @@ export const runRequestDecision = async (args: string[]): Promise<void> => {
 
   const socketPath = process.env.AUTO_DEV_SOCKET ?? "/var/run/auto-dev.sock";
 
+  // Parse options: accept either string[] or {key,label,description}[] format.
+  const rawOptions: unknown = JSON.parse(values.options ?? "[]");
+  const normalizedOptions = Array.isArray(rawOptions)
+    ? rawOptions.map((o: unknown) => {
+        if (typeof o === "string") {
+          return { key: o, label: o, description: o };
+        }
+        return o;
+      })
+    : [];
+
   const request: DecisionRequest = {
     id: values.id ?? randomUUID(),
     workflowRunId: values["workflow-run-id"] ?? "",
     title: values.title ?? "",
-    options: JSON.parse(values.options ?? "[]"),
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+    options: normalizedOptions as DecisionRequest["options"],
     recommendation: values.recommendation ?? "",
     context: values.context ?? null,
   };
@@ -48,7 +60,13 @@ export const runRequestDecision = async (args: string[]): Promise<void> => {
           resolve();
           return;
         }
-        process.stdout.write(JSON.stringify(parsed) + "\n");
+        // Output simplified format that agents can easily parse.
+        // Include both `choice` and full response for compatibility.
+        const output = {
+          choice: parsed.resolution ?? parsed.choice,
+          ...parsed,
+        };
+        process.stdout.write(JSON.stringify(output) + "\n");
         socket.end();
         resolve();
       } catch {

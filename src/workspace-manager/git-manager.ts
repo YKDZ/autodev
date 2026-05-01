@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -55,17 +55,17 @@ export class GitManager {
     this.repoFullName = repoFullName;
   }
 
-  ensureRepo(): void {
+  async ensureRepo(): Promise<void> {
     if (!existsSync(resolve(this.workspaceRoot, ".git"))) {
       logger.info("[auto-dev] Cloning repository...");
       const token = getAuthEnv().GITHUB_TOKEN;
       const url = `https://x-access-token:${token}@github.com/${this.repoFullName}.git`;
-      execSync(`git clone "${url}" "${this.workspaceRoot}" --depth=1`, {
+      execFileSync("git", ["clone", url, this.workspaceRoot, "--depth=1"], {
         stdio: "pipe",
       });
     } else {
       logger.info("[auto-dev] Fetching origin/main...");
-      this.fetchWithRetry();
+      await this.fetchWithRetry();
     }
     // Configure git identity
     git(
@@ -79,22 +79,23 @@ export class GitManager {
     return this.workspaceRoot;
   }
 
-  private fetchWithRetry(): void {
-    const delaysSec = [1, 2, 4];
+  private async fetchWithRetry(): Promise<void> {
+    const delaysMs = [1_000, 2_000, 4_000];
     let lastError: Error | null = null;
 
-    for (let i = 0; i <= delaysSec.length; i += 1) {
+    for (let i = 0; i <= delaysMs.length; i += 1) {
       try {
         git(["fetch", "origin", "main"], this.workspaceRoot);
         git(["rev-parse", "--verify", "origin/main"], this.workspaceRoot);
         return;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
-        if (i < delaysSec.length) {
+        if (i < delaysMs.length) {
           logger.warn(
-            `[auto-dev] git fetch origin main failed (attempt ${i + 1}/3): ${lastError.message}. Retrying in ${delaysSec[i]}s...`,
+            `[auto-dev] git fetch origin main failed (attempt ${i + 1}/3): ${lastError.message}. Retrying in ${delaysMs[i] / 1000}s...`,
           );
-          execSync(`sleep ${delaysSec[i]}`);
+          // oxlint-disable-next-line no-await-in-loop
+          await new Promise((resolve) => setTimeout(resolve, delaysMs[i]));
         }
       }
     }
@@ -103,7 +104,9 @@ export class GitManager {
     );
   }
 
-  createBranch(issueNumber: number): { branch: string; worktreePath: string } {
+  async createBranch(
+    issueNumber: number,
+  ): Promise<{ branch: string; worktreePath: string }> {
     const branch = `auto-dev/issue-${issueNumber}`;
     const worktreePath = resolve(
       this.workspaceRoot,
@@ -111,7 +114,7 @@ export class GitManager {
       `issue-${issueNumber}`,
     );
 
-    this.fetchWithRetry();
+    await this.fetchWithRetry();
 
     // Delete local branch if it exists (from a previous failed run)
     try {
@@ -162,7 +165,20 @@ export class GitManager {
   }
 
   ensureWorktree(branch: string, worktreePath: string): void {
-    if (existsSync(worktreePath)) return;
+    if (existsSync(worktreePath)) {
+      // Worktree exists — sync with remote if branch is already pushed
+      try {
+        gitWithAuth(["fetch", "origin", branch], this.workspaceRoot);
+        try {
+          git(["reset", "--hard", `origin/${branch}`], worktreePath);
+        } catch {
+          /* remote branch doesn't exist yet — keep local state */
+        }
+      } catch {
+        /* network failure or branch not on remote — keep local state */
+      }
+      return;
+    }
 
     try {
       git(["fetch", "origin", branch], this.workspaceRoot);
@@ -179,6 +195,36 @@ export class GitManager {
     git(["worktree", "add", worktreePath, branch], this.workspaceRoot);
   }
 
+  /**
+   * Sync worktree to latest remote branch state.
+   * Force-resets local worktree to match origin/<branch>.
+   * Safe to call before each agent invocation.
+   */
+  syncWorktree(branch: string, worktreePath: string): void {
+    // Discard uncommitted local changes
+    try {
+      git(["reset", "--hard", "HEAD"], worktreePath);
+      git(["clean", "-fd"], worktreePath);
+    } catch {
+      /* best-effort */
+    }
+
+    // Fetch latest from remote
+    try {
+      gitWithAuth(["fetch", "origin", branch], this.workspaceRoot);
+    } catch {
+      // Branch may not exist remotely yet (before create-pr)
+      return;
+    }
+
+    // Reset to match remote exactly
+    try {
+      git(["reset", "--hard", `origin/${branch}`], worktreePath);
+    } catch {
+      // Branch exists locally but not on remote — that's fine
+    }
+  }
+
   removeWorktree(worktreePath: string): void {
     try {
       git(["worktree", "remove", "--force", worktreePath], this.workspaceRoot);
@@ -187,7 +233,11 @@ export class GitManager {
     }
   }
 
-  commitAndPush(branch: string, message: string, cwd?: string): void {
+  async commitAndPush(
+    branch: string,
+    message: string,
+    cwd?: string,
+  ): Promise<void> {
     const dir = cwd ?? this.workspaceRoot;
     git(["add", "-A"], dir);
     try {
@@ -197,33 +247,40 @@ export class GitManager {
     }
     // Retry push with backoff for transient network failures.
     // Use --force to handle cases where the remote branch already exists.
-    const delaysSec = [5, 10, 20];
-    for (let i = 0; i <= delaysSec.length; i += 1) {
+    const delaysMs = [5_000, 10_000, 20_000];
+    for (let i = 0; i <= delaysMs.length; i += 1) {
       try {
         gitWithAuth(["push", "--force", "-u", "origin", branch], dir, {
           GIT_HTTP_LOW_SPEED_TIME: "20",
           GIT_HTTP_LOW_SPEED_LIMIT: "1000",
+          // Skip git-lfs pre-push hook if git-lfs is not installed in the container
+          GIT_LFS_SKIP_PUSH: "1",
         });
         return;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (i < delaysSec.length) {
+        if (i < delaysMs.length) {
           logger.warn(
-            `[auto-dev] git push failed (attempt ${i + 1}/${delaysSec.length}), retrying in ${delaysSec[i]}s: ${message}`,
+            `[auto-dev] git push failed (attempt ${i + 1}/${delaysMs.length}), retrying in ${delaysMs[i] / 1000}s: ${message}`,
           );
-          execSync(`sleep ${delaysSec[i]}`);
+          // oxlint-disable-next-line no-await-in-loop
+          await new Promise((resolve) => setTimeout(resolve, delaysMs[i]));
         } else {
           throw new Error(
-            `git push failed after ${delaysSec.length + 1} attempts: ${message}`,
+            `git push failed after ${delaysMs.length + 1} attempts: ${message}`,
           );
         }
       }
     }
   }
 
-  tryPush(branch: string, worktreePath: string, maxAttempts = 5): boolean {
-    const delaysSec = [5, 10, 20, 40, 80];
-    for (let i = 0; i < Math.min(maxAttempts, delaysSec.length); i += 1) {
+  async tryPush(
+    branch: string,
+    worktreePath: string,
+    maxAttempts = 5,
+  ): Promise<boolean> {
+    const delaysMs = [5_000, 10_000, 20_000, 40_000, 80_000];
+    for (let i = 0; i < Math.min(maxAttempts, delaysMs.length); i += 1) {
       try {
         gitWithAuth(
           ["push", "--force", "origin", `${branch}:${branch}`],
@@ -235,8 +292,9 @@ export class GitManager {
         logger.warn(
           `[auto-dev] tryPush attempt ${i + 1}/${maxAttempts} failed for ${branch}: ${message}`,
         );
-        if (i >= Math.min(maxAttempts, delaysSec.length) - 1) break;
-        execSync(`sleep ${delaysSec[i]}`);
+        if (i >= Math.min(maxAttempts, delaysMs.length) - 1) break;
+        // oxlint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => setTimeout(resolve, delaysMs[i]));
       }
     }
     return false;

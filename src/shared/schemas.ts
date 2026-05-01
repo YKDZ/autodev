@@ -9,6 +9,7 @@ export const WorkflowRunSchema = z.object({
   status: z.enum([
     "pending",
     "running",
+    "workspace_ready",
     "waiting_decision",
     "waiting_human",
     "blocked",

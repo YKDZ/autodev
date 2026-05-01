@@ -158,7 +158,16 @@ export class DecisionSocketServer {
     let buffer = "";
     let decisionId: string | null = null;
 
+    // Close idle connections that never send a request within 10 seconds.
+    // This prevents probing scripts from blocking the socket server indefinitely.
+    const idleTimeout = setTimeout(() => {
+      if (!decisionId) {
+        socket.destroy();
+      }
+    }, 10_000);
+
     socket.on("data", (data: Buffer) => {
+      clearTimeout(idleTimeout);
       socket.pause();
       void this.handleData(socket, data, buffer, decisionId)
         .then((updated) => {

@@ -19,6 +19,7 @@ export const loadConfig = async (
     pollIntervalSec: DEFAULT_CONFIG.pollIntervalSec,
     maxDecisionPerRun: DEFAULT_CONFIG.maxDecisionPerRun,
     maxImplCycles: DEFAULT_CONFIG.maxImplCycles,
+    maxConcurrentRuns: DEFAULT_CONFIG.maxConcurrentRuns,
   };
 
   // Override from environment variables
@@ -39,6 +40,11 @@ export const loadConfig = async (
   if (process.env["AUTO_DEV_MAX_IMPL_CYCLES"]) {
     const parsed = parseInt(process.env["AUTO_DEV_MAX_IMPL_CYCLES"], 10);
     if (!Number.isNaN(parsed)) config.maxImplCycles = parsed;
+  }
+
+  if (process.env["AUTO_DEV_MAX_CONCURRENT_RUNS"]) {
+    const parsed = parseInt(process.env["AUTO_DEV_MAX_CONCURRENT_RUNS"], 10);
+    if (!Number.isNaN(parsed)) config.maxConcurrentRuns = parsed;
   }
 
   if (process.env["AUTO_DEV_AGENTS"]) {

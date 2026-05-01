@@ -11,6 +11,7 @@ export type AgentEffort = "xhigh" | "high" | "medium" | "low" | "max";
 export type WorkflowStatus =
   | "pending"
   | "running"
+  | "workspace_ready"
   | "waiting_decision"
   | "waiting_human"
   | "blocked"

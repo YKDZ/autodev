@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -27,22 +27,23 @@ export class BranchManager {
     this.repoFullName = repoFullName;
   }
 
-  private fetchWithRetry(): void {
-    const delaysSec = [1, 2, 4];
+  private async fetchWithRetry(): Promise<void> {
+    const delaysMs = [1_000, 2_000, 4_000];
     let lastError: Error | null = null;
 
-    for (let i = 0; i <= delaysSec.length; i += 1) {
+    for (let i = 0; i <= delaysMs.length; i += 1) {
       try {
         git(["fetch", "origin", "main"], this.workspaceRoot);
         git(["rev-parse", "--verify", "origin/main"], this.workspaceRoot);
         return;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
-        if (i < delaysSec.length) {
+        if (i < delaysMs.length) {
           logger.warn(
-            `[auto-dev] git fetch origin main failed (attempt ${i + 1}/3): ${lastError.message}. Retrying in ${delaysSec[i]}s...`,
+            `[auto-dev] git fetch origin main failed (attempt ${i + 1}/3): ${lastError.message}. Retrying in ${delaysMs[i] / 1000}s...`,
           );
-          execSync(`sleep ${delaysSec[i]}`);
+          // oxlint-disable-next-line no-await-in-loop
+          await new Promise((resolve) => setTimeout(resolve, delaysMs[i]));
         }
       }
     }
@@ -51,7 +52,9 @@ export class BranchManager {
     );
   }
 
-  createBranch(issueNumber: number): { branch: string; worktreePath: string } {
+  async createBranch(
+    issueNumber: number,
+  ): Promise<{ branch: string; worktreePath: string }> {
     const branch = `auto-dev/issue-${issueNumber}`;
     const worktreePath = resolve(
       this.workspaceRoot,
@@ -60,7 +63,7 @@ export class BranchManager {
     );
 
     // Fetch without touching the main working tree
-    this.fetchWithRetry();
+    await this.fetchWithRetry();
 
     // Create branch pointing at origin/main — delete first if it already exists
     // (e.g. from a previously failed run)

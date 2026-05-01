@@ -12,6 +12,8 @@ export interface WorkspaceInfo {
   branch: string;
   worktreePath: string;
   containerId: string;
+  /** Working directory inside the devcontainer (e.g. /workspaces/issue-37). Empty when no container. */
+  remoteWorkspaceFolder: string;
 }
 
 export class WorkspaceManager {
@@ -33,12 +35,13 @@ export class WorkspaceManager {
    * Full lifecycle: create branch, worktree, start devcontainer.
    */
   async create(issueNumber: number, runId: string): Promise<WorkspaceInfo> {
-    const { branch, worktreePath } = this.git.createBranch(issueNumber);
+    const { branch, worktreePath } = await this.git.createBranch(issueNumber);
 
     logger.info(
       `[auto-dev] Starting devcontainer for worktree ${worktreePath}...`,
     );
-    const containerId = this.devcontainer.start(worktreePath);
+    const { containerId, remoteWorkspaceFolder } =
+      this.devcontainer.start(worktreePath);
 
     const entry: WorkspaceRegistryEntry = {
       issueNumber,
@@ -50,7 +53,7 @@ export class WorkspaceManager {
     };
     await registerWorkspace(this.workspaceRoot, entry);
 
-    return { branch, worktreePath, containerId };
+    return { branch, worktreePath, containerId, remoteWorkspaceFolder };
   }
 
   /**
@@ -67,14 +70,21 @@ export class WorkspaceManager {
     this.git.ensureWorktree(branch, worktreePath);
 
     let containerId = "";
+    let remoteWorkspaceFolder = "";
     const existing = findWorkspaceByIssueNumber(
       this.workspaceRoot,
       issueNumber,
     );
     if (existing && this.devcontainer.isRunning(existing.containerId)) {
       containerId = existing.containerId;
+      // Compute remote folder from stored worktree path
+      // oxlint-disable-next-line typescript/unbound-method
+      const { basename } = await import("node:path");
+      remoteWorkspaceFolder = `/workspaces/${basename(worktreePath)}`;
     } else {
-      containerId = this.devcontainer.start(worktreePath);
+      const result = this.devcontainer.start(worktreePath);
+      containerId = result.containerId;
+      remoteWorkspaceFolder = result.remoteWorkspaceFolder;
     }
 
     const entry: WorkspaceRegistryEntry = {
@@ -87,7 +97,7 @@ export class WorkspaceManager {
     };
     await registerWorkspace(this.workspaceRoot, entry);
 
-    return { branch, worktreePath, containerId };
+    return { branch, worktreePath, containerId, remoteWorkspaceFolder };
   }
 
   /**
