@@ -17,36 +17,32 @@ const getRepo = (): string => {
   return repo;
 };
 
-/** auto-dev pr-review-comment <pr-number> <path> <line> --body <text> [--end-line <n>] [--side LEFT|RIGHT] */
+/** auto-dev pr-review-comment <pr-number> <path> <position> --body <text>
+ * position: 1-based line offset within the diff hunk (run `gh pr diff <pr>` to identify it)
+ */
 export const runPRReviewComment = async (args: string[]): Promise<void> => {
   const { values, positionals } = parseArgs({
     args,
     options: {
       body: { type: "string" },
-      "end-line": { type: "string" },
-      side: { type: "string" },
     },
     allowPositionals: true,
   });
 
-  const [prNumberStr, filePath, lineStr] = positionals;
-  if (!prNumberStr || !filePath || !lineStr || !values.body) {
+  const [prNumberStr, filePath, positionStr] = positionals;
+  if (!prNumberStr || !filePath || !positionStr || !values.body) {
     logger.error(
-      "Usage: auto-dev pr-review-comment <pr-number> <path> <line> --body <text> [--end-line <n>] [--side LEFT|RIGHT]",
+      "Usage: auto-dev pr-review-comment <pr-number> <path> <position> --body <text>\n" +
+        "  position: 1-based offset within the diff hunk (use gh pr diff <pr> to identify)",
     );
     process.exit(1);
   }
 
   const prNumber = parseInt(prNumberStr, 10);
-  const line = parseInt(lineStr, 10);
-  const endLine = values["end-line"]
-    ? parseInt(values["end-line"], 10)
-    : undefined;
-  const sideRaw = values.side;
-  const side: "LEFT" | "RIGHT" = sideRaw === "LEFT" ? "LEFT" : "RIGHT";
+  const position = parseInt(positionStr, 10);
 
-  if (isNaN(prNumber) || isNaN(line)) {
-    logger.error("pr-number and line must be integers");
+  if (isNaN(prNumber) || isNaN(position)) {
+    logger.error("pr-number and position must be integers");
     process.exit(1);
   }
 
@@ -56,14 +52,12 @@ export const runPRReviewComment = async (args: string[]): Promise<void> => {
   createPRReviewComment(repo, prNumber, {
     commitId,
     path: filePath,
-    line,
-    startLine: endLine !== undefined ? line : undefined,
+    position,
     body: values.body,
-    side,
   });
 
   logger.info(
-    `[auto-dev] Posted review comment on PR #${prNumber} at ${filePath}:${line}`,
+    `[auto-dev] Posted review comment on PR #${prNumber} at ${filePath} (diff position ${position})`,
   );
 };
 

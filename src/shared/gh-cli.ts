@@ -236,20 +236,20 @@ export const getPRHeadSha = (repo: string, prNumber: number): string => {
   return parsed.headRefOid;
 };
 
-/** Create an inline review comment on a PR file line. */
+/** Create an inline review comment on a PR file line.
+ * `position` is the 1-based line offset within the diff hunk (use `gh pr diff <pr>` to count).
+ */
 export const createPRReviewComment = (
   repo: string,
   prNumber: number,
   comment: {
     commitId: string;
     path: string;
-    line: number;
-    startLine?: number;
+    position: number;
     body: string;
-    side?: "LEFT" | "RIGHT";
   },
 ): void => {
-  const args = [
+  gh([
     "api",
     `repos/${repo}/pulls/${prNumber}/comments`,
     "-X",
@@ -260,18 +260,9 @@ export const createPRReviewComment = (
     `commit_id=${comment.commitId}`,
     "-f",
     `path=${comment.path}`,
-    "-f",
-    `subject_type=line`,
     "-F",
-    `line=${comment.line}`,
-    "-f",
-    `side=${comment.side ?? "RIGHT"}`,
-  ];
-  if (comment.startLine !== undefined) {
-    args.push("-F", `start_line=${comment.startLine}`);
-    args.push("-f", `start_side=${comment.side ?? "RIGHT"}`);
-  }
-  gh(args);
+    `position=${comment.position}`,
+  ]);
 };
 
 export interface PRReviewComment {
