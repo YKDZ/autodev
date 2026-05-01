@@ -4,9 +4,6 @@ import { basename } from "node:path";
 
 import { logger } from "../shared/logger.js";
 
-/** Container path where the decision socket directory is mounted inside devcontainers. */
-const DEVCONTAINER_SOCKET_DIR = "/var/run/auto-dev";
-
 export class DevcontainerManager {
   private readonly workspaceRoot: string;
 
@@ -19,8 +16,8 @@ export class DevcontainerManager {
    * Returns { containerId, remoteWorkspaceFolder } or empty strings if the container
    * could not be started (caller should fall back to local execution).
    *
-   * The decision socket dir (host: dirname of AUTO_DEV_SOCKET or /var/run/auto-dev)
-   * is bind-mounted into the devcontainer so agents can call `auto-dev request-decision`.
+   * The decision server address is injected via env vars (AUTO_DEV_DECISION_HOST,
+   * AUTO_DEV_DECISION_PORT) at exec time by the agent dispatcher — no bind mount needed.
    */
   start(worktreePath: string): {
     containerId: string;
@@ -29,11 +26,6 @@ export class DevcontainerManager {
     // Default: devcontainer mounts workspace at /workspaces/<basename>
     const defaultRemoteFolder = `/workspaces/${basename(worktreePath)}`;
 
-    // The socket lives in workspaceRoot/tools/auto-dev/state/ which is bind-mounted
-    // at the SAME path on both the host and this container, so Docker daemon can
-    // bind-mount it into the devcontainer using that host path.
-    const hostSocketDir = `${this.workspaceRoot}/tools/auto-dev/state`;
-    const mountArg = `type=bind,source=${hostSocketDir},target=${DEVCONTAINER_SOCKET_DIR}`;
     // Also mount the main repo's .git directory at the same absolute host path so
     // the worktree's `.git` file pointer (gitdir: <workspaceRoot>/.git/worktrees/…)
     // resolves correctly inside the container.
@@ -49,8 +41,6 @@ export class DevcontainerManager {
           "--workspace-folder",
           worktreePath,
           "--mount",
-          mountArg,
-          "--mount",
           gitMountArg,
         ],
         {
@@ -65,7 +55,6 @@ export class DevcontainerManager {
       return this.startFallbackContainer(
         worktreePath,
         defaultRemoteFolder,
-        hostSocketDir,
       );
     }
 
@@ -117,11 +106,12 @@ export class DevcontainerManager {
    * all required tooling (claude, auto-dev, git, pnpm, etc).
    *
    * The workspace is mounted at /workspaces/<basename> to match devcontainer convention.
+   * `--add-host=host.docker.internal:host-gateway` ensures the container can reach the
+   * orchestrator's TCP decision server on the host network.
    */
   private startFallbackContainer(
     worktreePath: string,
     remoteWorkspaceFolder: string,
-    hostSocketDir: string,
   ): { containerId: string; remoteWorkspaceFolder: string } {
     const worktreeName = basename(worktreePath);
     const containerName = `autodev-worktree-${worktreeName}`;
@@ -158,7 +148,9 @@ export class DevcontainerManager {
       `[auto-dev] Starting fallback container for ${worktreePath} using image ${imageToUse}`,
     );
 
-    // Run detached container with worktree and socket mounts, keeping it alive.
+    // Run detached container with worktree mount, keeping it alive.
+    // --add-host=host.docker.internal:host-gateway allows the container to reach
+    // the orchestrator's TCP decision server running on the host (Linux Docker).
     // Also mount the main repo's .git directory at the same absolute host path so
     // that the worktree's `.git` file pointer (gitdir: <workspaceRoot>/.git/worktrees/…)
     // resolves correctly inside the container.
@@ -170,10 +162,9 @@ export class DevcontainerManager {
         "-d",
         "--name",
         containerName,
+        "--add-host=host.docker.internal:host-gateway",
         "--mount",
         `type=bind,source=${worktreePath},target=${remoteWorkspaceFolder}`,
-        "--mount",
-        `type=bind,source=${hostSocketDir},target=${DEVCONTAINER_SOCKET_DIR}`,
         "--mount",
         `type=bind,source=${mainGitDir},target=${mainGitDir}`,
         "-w",

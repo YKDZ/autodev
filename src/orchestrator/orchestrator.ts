@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { networkInterfaces } from "node:os";
 
 import type { AutoDevConfig } from "../config/types.js";
 import type { WorkflowRun } from "../shared/types.js";
@@ -49,16 +50,34 @@ import { WorkspaceManager } from "../workspace-manager/index.js";
 import { IssueWatcher } from "./issues-watcher.js";
 import { WorkflowManager } from "./workflow-manager.js";
 
-/** Returns the socket path for this orchestrator instance.
- * Prefers AUTO_DEV_SOCKET env var; when running in Docker with workspaceRoot
- * bind-mounted at the same path on host and container, falls back to a path
- * inside workspaceRoot/tools/auto-dev/state/ so devcontainers can access it
- * via a bind mount of that directory.
+/** Returns the TCP port for the decision server.
+ * Reads AUTO_DEV_DECISION_PORT env var; defaults to 3000.
  */
-const resolveSocketPath = (workspaceRoot: string): string => {
-  if (process.env.AUTO_DEV_SOCKET) return process.env.AUTO_DEV_SOCKET;
-  // Use state dir so the socket lives on the bind-mounted host filesystem
-  return `${workspaceRoot}/tools/auto-dev/state/auto-dev.sock`;
+const resolveDecisionPort = (): number => {
+  const raw = process.env.AUTO_DEV_DECISION_PORT;
+  if (raw) {
+    const parsed = parseInt(raw, 10);
+    if (!Number.isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return 3000;
+};
+
+/** Returns the host address advertised to agent containers so they can
+ * connect back to the decision TCP server.
+ * Reads AUTO_DEV_DECISION_HOST env var; falls back to the first non-loopback
+ * IPv4 address (suitable for Docker-in-Docker scenarios where the orchestrator
+ * is itself a container and workers are sibling containers).
+ */
+const resolveDecisionHost = (): string => {
+  if (process.env.AUTO_DEV_DECISION_HOST) return process.env.AUTO_DEV_DECISION_HOST;
+  for (const ifaces of Object.values(networkInterfaces())) {
+    for (const iface of ifaces ?? []) {
+      if (!iface.internal && iface.family === "IPv4") {
+        return iface.address;
+      }
+    }
+  }
+  return "127.0.0.1";
 };
 
 export class Orchestrator {
@@ -75,6 +94,9 @@ export class Orchestrator {
   private issueWatcher: IssueWatcher | null = null;
   private polling = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  /** TCP decision server host/port resolved at startup. */
+  private decisionHost: string = "127.0.0.1";
+  private decisionPort: number = 3000;
   /** runId -> issueNumber for active runs */
   private readonly activeRuns: Map<string, number> = new Map();
   /** GitHub comment IDs that have already been processed */
@@ -95,6 +117,9 @@ export class Orchestrator {
     this.config = await loadConfig(this.workspaceRoot);
     await ensureStateDirs(this.workspaceRoot);
 
+    this.decisionPort = resolveDecisionPort();
+    this.decisionHost = resolveDecisionHost();
+
     this.decisionManager = new DecisionManager(this.workspaceRoot, this.config);
     this.workflowManager = new WorkflowManager(this.workspaceRoot);
     this.workspaceManager = new WorkspaceManager(
@@ -107,7 +132,7 @@ export class Orchestrator {
     this.issueWatcher = new IssueWatcher();
 
     this.socketServer = new DecisionSocketServer({
-      socketPath: resolveSocketPath(this.workspaceRoot),
+      port: resolveDecisionPort(),
       config: this.config,
       workspaceRoot: this.workspaceRoot,
       onDecisionRequest: async (request) => {
@@ -540,7 +565,7 @@ export class Orchestrator {
             effort: run.agentEffort,
             maxDecisions: this.config!.maxDecisionPerRun,
             agentDefinition: run.agentDefinition,
-            autoMerge: true,
+            autoMerge: false,
             issueTitle: `Issue #${run.issueNumber}`,
             issueBody: "",
           }),
@@ -625,6 +650,8 @@ export class Orchestrator {
           : workspaceInfo.worktreePath,
         containerId: workspaceInfo.containerId,
         workflowRunId: run.id,
+        decisionHost: this.decisionHost,
+        decisionPort: this.decisionPort,
       })) {
         if (event.type === "stdout" && event.data) {
           this.auditLogger!.log({
@@ -652,14 +679,7 @@ export class Orchestrator {
           }
 
           if (code === 0 && prNumber) {
-            try {
-              this.prManager!.enableAutoMerge(prNumber);
-              logger.info(`[auto-dev] Auto-merge enabled for PR #${prNumber}`);
-            } catch (err) {
-              logger.error(
-                `[auto-dev] Failed to enable auto-merge for PR #${prNumber}: ${String(err)}`,
-              );
-            }
+            // Auto-merge is intentionally disabled — PRs must be merged manually on GitHub.
           }
 
           this.auditLogger!.log({
@@ -823,6 +843,8 @@ export class Orchestrator {
           : workspaceInfo.worktreePath,
         containerId: workspaceInfo.containerId,
         workflowRunId: run.id,
+        decisionHost: this.decisionHost,
+        decisionPort: this.decisionPort,
       })) {
         if (event.type === "stdout" && event.data) {
           rawStdout += event.data;
@@ -1137,6 +1159,8 @@ export class Orchestrator {
           : workspaceInfo.worktreePath,
         containerId: workspaceInfo.containerId,
         workflowRunId: run.id,
+        decisionHost: this.decisionHost,
+        decisionPort: this.decisionPort,
       })) {
         if (event.type === "exit") {
           const code = event.exitCode ?? 0;

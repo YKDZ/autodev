@@ -1,7 +1,6 @@
 import type { Socket, Server } from "node:net";
 
 import { randomUUID } from "node:crypto";
-import { unlinkSync, existsSync } from "node:fs";
 import { createServer } from "node:net";
 
 import type { AutoDevConfig } from "../config/types.js";
@@ -16,7 +15,8 @@ interface PendingConnection {
 }
 
 export interface SocketServerOptions {
-  socketPath: string;
+  /** TCP port to listen on. */
+  port: number;
   config: AutoDevConfig;
   workspaceRoot: string;
   onDecisionRequest: (request: DecisionRequest) => Promise<{
@@ -45,26 +45,20 @@ export class DecisionSocketServer {
 
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
-      if (existsSync(this.options.socketPath)) {
-        try {
-          unlinkSync(this.options.socketPath);
-        } catch {
-          // Stale socket cleanup failed
-        }
-      }
-
       this.server = createServer((socket: Socket) => {
         this.handleConnection(socket);
       });
 
       this.server.on("error", (err: NodeJS.ErrnoException) => {
-        logger.error(`[auto-dev] Decision socket server error: ${err.message}`);
+        logger.error(
+          `[auto-dev] Decision TCP server error: ${err.message}`,
+        );
         reject(err);
       });
 
-      this.server.listen(this.options.socketPath, () => {
+      this.server.listen(this.options.port, "0.0.0.0", () => {
         logger.info(
-          `[auto-dev] Decision socket listening on ${this.options.socketPath}`,
+          `[auto-dev] Decision server listening on TCP 0.0.0.0:${this.options.port}`,
         );
         this.startResolutionPoller();
         resolve();
@@ -86,13 +80,6 @@ export class DecisionSocketServer {
 
       if (this.server) {
         this.server.close(() => {
-          if (existsSync(this.options.socketPath)) {
-            try {
-              unlinkSync(this.options.socketPath);
-            } catch {
-              /* ignore */
-            }
-          }
           resolve();
         });
       } else {
@@ -104,7 +91,7 @@ export class DecisionSocketServer {
   /**
    * Polls pending decisions against the state store so that when a human
    * resolves a decision via `auto-dev resolve-decision` (which only writes to
-   * the file system), the blocked `request-decision` socket connection is
+   * the file system), the blocked `request-decision` connection is
    * automatically woken up and the agent resumes.
    */
   private startResolutionPoller(): void {
@@ -159,7 +146,6 @@ export class DecisionSocketServer {
     let decisionId: string | null = null;
 
     // Close idle connections that never send a request within 10 seconds.
-    // This prevents probing scripts from blocking the socket server indefinitely.
     const idleTimeout = setTimeout(() => {
       if (!decisionId) {
         socket.destroy();
@@ -188,7 +174,7 @@ export class DecisionSocketServer {
     });
 
     socket.on("error", (err: Error) => {
-      logger.error(`[auto-dev] Socket error: ${err.message}`);
+      logger.error(`[auto-dev] TCP connection error: ${err.message}`);
       if (decisionId) {
         this.cleanupConnection(decisionId);
       }

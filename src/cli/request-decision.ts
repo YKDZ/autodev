@@ -20,7 +20,8 @@ export const runRequestDecision = async (args: string[]): Promise<void> => {
     strict: true,
   });
 
-  const socketPath = process.env.AUTO_DEV_SOCKET ?? "/var/run/auto-dev.sock";
+  const host = process.env.AUTO_DEV_DECISION_HOST ?? "127.0.0.1";
+  const port = parseInt(process.env.AUTO_DEV_DECISION_PORT ?? "3000", 10);
 
   // Parse options: accept either string[] or {key,label,description}[] format.
   const rawOptions: unknown = JSON.parse(values.options ?? "[]");
@@ -43,7 +44,7 @@ export const runRequestDecision = async (args: string[]): Promise<void> => {
     context: values.context ?? null,
   };
 
-  const socket = createConnection(socketPath);
+  const socket = createConnection(port, host);
 
   await new Promise<void>((resolve, reject) => {
     socket.on("connect", () => {

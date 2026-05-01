@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { runAudit } from "./cli/audit.js";
+import { runCIStatus } from "./cli/ci-status.js";
 import { runConfig } from "./cli/config.js";
 import { runDecisions } from "./cli/decisions.js";
 import { runHelpRequest } from "./cli/help-request.js";
@@ -25,6 +26,7 @@ const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   start: runStart,
   stop: runStop,
   status: runStatus,
+  "ci-status": runCIStatus,
   "help-request": runHelpRequest,
   "request-decision": runRequestDecision,
   "request-decisions": runRequestDecisions,

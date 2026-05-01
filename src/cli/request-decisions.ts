@@ -24,7 +24,8 @@ export const runRequestDecisions = async (args: string[]): Promise<void> => {
     strict: true,
   });
 
-  const socketPath = process.env.AUTO_DEV_SOCKET ?? "/var/run/auto-dev.sock";
+  const host = process.env.AUTO_DEV_DECISION_HOST ?? "127.0.0.1";
+  const port = parseInt(process.env.AUTO_DEV_DECISION_PORT ?? "3000", 10);
   const workflowRunId = values["workflow-run-id"] ?? "";
   const rawDecisions = JSON.parse(values.decisions ?? "[]");
 
@@ -47,7 +48,7 @@ export const runRequestDecisions = async (args: string[]): Promise<void> => {
     process.exit(1);
   }
 
-  const socket = createConnection(socketPath);
+  const socket = createConnection(port, host);
   const payload = JSON.stringify({ batch: decisions }) + "\n";
 
   await new Promise<void>((resolve, reject) => {
