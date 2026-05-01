@@ -1,155 +1,92 @@
 ---
-description: Describe when these instructions should be loaded
+description: autodev 项目概览，适用于所有文件
 applyTo: "**/*"
 ---
 
-# CAT Project Overview
+# Autodev 项目概览
 
-## Project Description
+## 用途
 
-**CAT** is a secure, efficient, and easily extensible self-hosted **Computer-Assisted Translation** web application (similar to Crowdin).
+Autodev 是一个 **GitHub 驱动的 AI 代码助手编排系统**。它监听带有 `auto-dev:ready` 标签的 GitHub Issue，自动为每个 Issue 创建独立的 git worktree 和 devcontainer，然后在容器内启动 AI agent（Claude Code）执行编码任务，并将结果以 PR 的形式提交回 GitHub。
 
-**License**: GPL-3.0-only (main app), MIT (packages/plugins)
+核心流程：
+1. Orchestrator 轮询 GitHub，发现带标签的 Issue
+2. 为该 Issue 创建专属 git worktree 和 devcontainer（支持 devcontainer CLI 或 fallback docker run）
+3. 在容器内以 `claude --agent <name>` 方式启动 AI agent
+4. Agent 可通过 Unix socket 向 orchestrator 请求人工决策（`auto-dev request-decision`）
+5. Agent 完成后创建 PR，orchestrator 发布完成评论
+6. 在 PR 中 `@autodev <指令>` 可重新触发 agent 在原 worktree 继续工作
 
----
+## 技术栈
 
-## Tech Stack
+| 层次 | 技术 |
+|------|------|
+| 运行时 | Node.js 24，TypeScript ESM |
+| 构建 | Vite 8 + `unplugin-dts` |
+| 测试 | Vitest 4 |
+| 代码质量 | oxlint（含 type-aware）、oxfmt |
+| 状态存储 | Node.js 内置 `node:sqlite`（`DatabaseSync`，实验性） |
+| Schema 校验 | Zod 4 |
+| GitHub 集成 | GitHub App JWT 认证 + `gh` CLI |
+| AI Agent | Claude Code（`claude` CLI），通过 ANTHROPIC_* 环境变量配置 |
+| 容器化 | Docker（Docker-outside-of-Docker），可用 devcontainer CLI 或 fallback docker run |
+| 进程间通信 | Unix Domain Socket（agent ↔ orchestrator 决策请求） |
 
-### Core Technologies
-
-- **Runtime**: Node.js 24+
-- **Language**: TypeScript 5.x (strict mode)
-- **Package Manager**: pnpm 10.32+
-- **Monorepo Tool**: moon 2.x (via @moonrepo/cli)
-
-### Frontend
-
-- **Framework**: Vue 3.5+ (Composition API)
-- **SSR Framework**: Vike 0.4+ with vike-vue
-- **UI Components**:
-  - Reka UI 2.9+ (headless components)
-  - shadcn-vue (via custom sync)
-  - Tailwind CSS 4.2+
-  - Lucide icons
-- **State Management**: Pinia 3.0+ with Pinia Colada
-- **i18n**: Vue I18n 11.3+
-- **Forms**: VeeValidate 4.15+ with Zod validation
-- **Utilities**: VueUse 14.2+
-
-### Backend
-
-- **HTTP Framework**: Hono 4.11+ (via @photonjs/hono)
-- **RPC**: oRPC 1.13+
-- **Telefunc**: 0.2.19+ (for server functions)
-- **WebSocket**: @hono/node-ws
-- **MCP**: @hono/mcp, @modelcontextprotocol/sdk
-
-### Database & Storage
-
-- **ORM**: Drizzle ORM 1.0.0-beta (PostgreSQL)
-- **Database**: PostgreSQL 18+ with pgvector extension
-- **Cache**: Redis 5.11+
-- **Migrations**: Drizzle Kit
-
-### Testing & Quality
-
-- **Unit Testing**: Vitest 4.1+
-- **E2E Testing**: Playwright 1.58+
-- **Linting**: oxlint 1.56+ (with tsgolint)
-- **Formatting**: oxfmt 0.41+
-- **Type Checking**: TypeScript + vue-tsc
-
-### Build Tools
-
-- **Bundler**: Vite 8.0+
-- **Vue Compiler**: @vitejs/plugin-vue
-- **Type Generation**: unplugin-dts
-
----
-
-## Project Structure
-
-For a comprehensive overview of all apps, core packages, and plugins, use the `autodoc-explore` skill. This reads auto-generated documentation that stays in sync with the codebase.
-
-Quick reference:
-
-- **Monorepo overview**: `apps/docs/src/autodoc/overview.md`
-- **Package API docs**: `apps/docs/src/autodoc/packages/<name>.md`
-- **Section indexes**: `apps/docs/src/autodoc/<section>/index.md`
-- **Subject paired pages**: `apps/docs/src/autodoc/<section>/<subject>.zh.md` / `.en.md`
-- **Agent catalogs**: `apps/docs/src/autodoc/agent/subjects.json`, `agent/references.json`
-- **Symbol lookup**: use `autodoc-lookup` skill
-- **Update docs**: `pnpm moon run autodoc:generate`
-- **Validate only (no write)**: `pnpm moon run autodoc:validate`
-
----
-
-## Architecture
-
-### Plugin System
-
-- **Manifest-based**: Each plugin has `manifest.json` defining services and components
-- **Service-oriented**: Plugins provide typed services via `PluginContext`
-- **Component injection**: Vue components can be injected into slots via registry
-- **Dynamic discovery**: Plugins loaded from `/plugins` directory at runtime
-
-### Server Architecture
-
-- **SSR**: Vike handles server-side rendering with Vue
-- **API Layer**: Hono routes handle RPC (oRPC), Telefunc, WebSocket, storage
-- **MCP**: Model Context Protocol support for AI integrations
-- **Database**: PostgreSQL (Drizzle ORM) + Redis (caching, queues)
-
-### Frontend Architecture
-
-- **File-based routing**: Vike filesystem routing
-- **State**: Pinia stores with persisted state
-- **Styling**: Tailwind CSS 4 + Reka UI components
-- **i18n**: Vue I18n with locale files in `/locales`
-
-## Configuration Files
-
-- **`moon.yml`**: moon project configuration (tasks, deps, metadata)
-- **`pnpm-workspace.yaml`**: pnpm workspace definition
-- **`tsconfig.base.json`**: Base TypeScript config (extends @tsconfig/node24)
-- **`packages/plugin-core/manifest-schema.json`**: Plugin manifest JSON Schema
-
----
-
-## Environment Variables
-
-- `DATABASE_URL`: PostgreSQL connection string
-- `REDIS_URL`: Redis connection string
-- `PORT`: Server port (default: 3000)
-- `NODE_ENV`: Environment (development/production)
-
----
-
-## Docker
-
-- Multi-stage build (base → deps → builder → deployer → runner)
-- Health check via `/scripts/docker-health-check.js`
-- Dependencies: PostgreSQL (pgvector), Redis, (optional: Ollama, LibreTranslate)
-- Base image: Node 24 Alpine
-
----
-
-## Design Principles
-
-1. **Plugin-first**: All core functionality via plugin system
-2. **Type-safe**: Strict TypeScript, Zod schemas, generated types
-3. **Self-hosted**: Docker-first deployment, no external dependencies
-4. **Extensible**: Service/component registry for easy extension
-5. **Modern stack**: Latest stable versions, ESM-only
-
----
-
-## Post-Modification QA
-
-After modifying any code, you **must** run the `qa-check` skill to validate changes:
+## 目录结构
 
 ```
-Skill: qa-check
+src/
+  cli.ts                   # CLI 入口，注册所有子命令
+  index.ts                 # 库导出
+  orchestrator/            # 主编排器：Issue 轮询、PR 触发、工作流管理
+  workspace-manager/       # Git worktree 创建、devcontainer 启动/停止
+  agent-dispatcher/        # Agent 调用适配层（Claude Code adapter）
+  decision-service/        # Unix socket 服务端 + 决策管理（DB 读写）
+  state-store/             # SQLite 状态存储、锁文件、目录初始化
+  config/                  # 配置 schema、加载器、类型定义
+  cli/                     # 各子命令实现（start/stop/status/request-decision 等）
+  shared/                  # 公共工具：logger、gh-cli 包装、comment 模板、schema、类型
+  audit-logger/            # Agent 运行日志（audit.jsonl）
+  validation/              # 验证门（运行前检查）
+  pr-manager/              # PR 创建与更新
+  branch-manager/          # 分支管理
+  ssh/                     # SSH 配置（远程 workspace 支持）
+  e2e/                     # 端到端测试
+  integration/             # 集成测试
 ```
 
-This ensures all tests, linting, type checking, and formatting pass before considering the task complete.
+## 关键配置字段（`AutoDevConfig`）
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `defaultAgent` | `"full-pipeline"` | 默认 agent 名称 |
+| `pollIntervalSec` | `30` | Issue 轮询间隔（秒） |
+| `maxDecisionPerRun` | `20` | 每次运行最大人工决策数 |
+| `maxImplCycles` | `5` | 最大实现循环次数 |
+| `maxConcurrentRuns` | `3` | 最大并发运行数 |
+
+## 常用命令
+
+```bash
+# 开发
+pnpm typecheck       # TypeScript 类型检查
+pnpm lint            # oxlint 检查
+pnpm test            # 单元测试
+
+# CLI
+auto-dev start       # 启动 orchestrator
+auto-dev status      # 查看运行状态
+auto-dev decisions   # 列出待处理决策
+auto-dev resolve-decision <id> --choice <value>   # 解决决策
+auto-dev request-decision ...  # （在 agent 容器内）请求人工决策
+```
+
+## 内置 Agent 列表
+
+| Agent | 说明 |
+|-------|------|
+| `full-pipeline` | brainstorm → iplan → impl → review → fix 完整流程 |
+| `one-shot-fix` | 直接从 Issue 错误描述调查并修复 |
+| `spec-only` | 仅生成设计规格并发布到 Issue |
+| `impl-only` | 跳过设计，直接实现 |
+| `retrigger` | 对已有 PR 分支应用后续指令 |
