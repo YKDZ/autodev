@@ -19,6 +19,10 @@ let _allowedUsersEnvSnapshot = "";
 /**
  * Check if a GitHub login is in the allowed users list.
  * Comparison is case-insensitive.
+ *
+ * SECURITY: When AUTO_DEV_ALLOWED_USERS is not configured (empty), this
+ * function returns false and denies all users. An explicit allowlist MUST be
+ * provided to enable any user to trigger the agent.
  */
 export const isAllowedUser = (login: string): boolean => {
   const current = process.env["AUTO_DEV_ALLOWED_USERS"] ?? "";
@@ -26,6 +30,6 @@ export const isAllowedUser = (login: string): boolean => {
     _allowedUsersEnvSnapshot = current;
     _allowedUsersCache = parseAllowedUsers();
   }
-  if (_allowedUsersCache.size === 0) return true; // No restriction when empty
+  if (_allowedUsersCache.size === 0) return false; // Deny all when no allowlist configured
   return _allowedUsersCache.has(login.toLowerCase());
 };

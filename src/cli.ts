@@ -5,6 +5,11 @@ import { runConfig } from "./cli/config.js";
 import { runDecisions } from "./cli/decisions.js";
 import { runHelpRequest } from "./cli/help-request.js";
 import { runList } from "./cli/list.js";
+import {
+  runPRReviewComment,
+  runPRReviewSubmit,
+  runPRReviewList,
+} from "./cli/pr-review.js";
 import { runPublishSummary } from "./cli/publish-summary.js";
 import { runReportPhase } from "./cli/report-phase.js";
 import { runRequestDecision } from "./cli/request-decision.js";
@@ -31,6 +36,9 @@ const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   list: runList,
   decisions: runDecisions,
   config: runConfig,
+  "pr-review-comment": runPRReviewComment,
+  "pr-review-submit": runPRReviewSubmit,
+  "pr-review-list": runPRReviewList,
 };
 
 const main = async () => {

@@ -14,28 +14,27 @@ export class PRManager {
     title: string,
     body: string,
     base = "main",
+    draft = false,
   ): { number: number; url: string } {
-    const output = execFileSync(
-      "gh",
-      [
-        "pr",
-        "create",
-        "--repo",
-        this.repoFullName,
-        "--base",
-        base,
-        "--head",
-        branch,
-        "--title",
-        title,
-        "--body",
-        body,
-      ],
-      {
-        encoding: "utf-8",
-        env: { ...process.env, ...getAuthEnv() },
-      },
-    ).trim();
+    const args = [
+      "pr",
+      "create",
+      "--repo",
+      this.repoFullName,
+      "--base",
+      base,
+      "--head",
+      branch,
+      "--title",
+      title,
+      "--body",
+      body,
+    ];
+    if (draft) args.push("--draft");
+    const output = execFileSync("gh", args, {
+      encoding: "utf-8",
+      env: { ...process.env, ...getAuthEnv() },
+    }).trim();
     const match = output.match(/\/pull\/(\d+)/);
     if (!match) {
       throw new Error(`Failed to parse PR number from gh output: ${output}`);

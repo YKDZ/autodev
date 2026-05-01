@@ -166,6 +166,44 @@ export const renderIssueCompletionComment = (
     `**Status**: ${status}`,
   ].join("\n");
 
+/** Issue claim comment when workspace is ready (no PR yet) */
+export const renderWorkspaceReadyComment = (run: WorkflowRun): string =>
+  [
+    BOT_MARKER,
+    "",
+    "## Auto-Dev Workspace Ready",
+    "",
+    `Auto-Dev claimed this issue and created a workspace. The agent is ready to start.`,
+    "",
+    `**Run ID**: \`${run.id}\``,
+    `**Branch**: \`${run.branch}\``,
+    "",
+    "**Next steps:**",
+    "- Comment `@autodev create-pr` to create a Draft PR and start the agent",
+    "- Comment `@autodev <question or instruction>` to ask the agent something without creating a PR",
+  ].join("\n");
+
+/** Issue comment posted after a @autodev <message> agent responds */
+export const renderIssueAgentResponse = (response: string): string =>
+  [BOT_MARKER, "", response].join("\n");
+
+/** Issue comment posted when @autodev create-pr creates a Draft PR */
+export const renderCreatePRComment = (
+  run: WorkflowRun,
+  prNumber: number,
+  prUrl: string,
+): string =>
+  [
+    BOT_MARKER,
+    "",
+    `## Auto-Dev Created Draft PR`,
+    "",
+    `Created Draft PR #${prNumber}: ${prUrl}`,
+    "",
+    `**Run ID**: \`${run.id}\``,
+    `**Branch**: \`${run.branch}\``,
+  ].join("\n");
+
 /** PR re-trigger "Working" comment -- posted before dispatching the re-trigger agent. */
 export const renderRetriggerWorkingComment = (
   run: WorkflowRun,

@@ -5,3 +5,5 @@ logs
 *.pem
 todo
 .e2e-workspace
+autodev-data
+tools

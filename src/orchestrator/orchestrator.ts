@@ -12,13 +12,15 @@ import { DecisionManager } from "../decision-service/decision-manager.js";
 import { DecisionSocketServer } from "../decision-service/socket-server.js";
 import { PRManager } from "../pr-manager/index.js";
 import {
-  renderClaimComment,
   renderWorkspaceComment,
   renderDecisionComment,
   renderCompletionComment,
   renderIssueCompletionComment,
   renderRetriggerWorkingComment,
   renderRetriggerCompletionComment,
+  renderWorkspaceReadyComment,
+  renderIssueAgentResponse,
+  renderCreatePRComment,
 } from "../shared/comment-templates.js";
 import {
   createComment,
@@ -27,6 +29,9 @@ import {
   listPRs,
   removeIssueLabels,
   updateIssueLabels,
+  addCommentReaction,
+  getIssueState,
+  getPRState,
 } from "../shared/gh-cli.js";
 import { logger } from "../shared/logger.js";
 import { isAllowedUser } from "../shared/user-filter.js";
@@ -36,6 +41,7 @@ import {
   saveCoordinatorState,
   loadWorkflowRun,
   listDecisions,
+  listWorkflowRuns,
   unregisterWorkspace,
   listAllWorkspaces,
 } from "../state-store/index.js";
@@ -43,7 +49,17 @@ import { WorkspaceManager } from "../workspace-manager/index.js";
 import { IssueWatcher } from "./issues-watcher.js";
 import { WorkflowManager } from "./workflow-manager.js";
 
-const DEFAULT_SOCKET_PATH = "/var/run/auto-dev.sock";
+/** Returns the socket path for this orchestrator instance.
+ * Prefers AUTO_DEV_SOCKET env var; when running in Docker with workspaceRoot
+ * bind-mounted at the same path on host and container, falls back to a path
+ * inside workspaceRoot/tools/auto-dev/state/ so devcontainers can access it
+ * via a bind mount of that directory.
+ */
+const resolveSocketPath = (workspaceRoot: string): string => {
+  if (process.env.AUTO_DEV_SOCKET) return process.env.AUTO_DEV_SOCKET;
+  // Use state dir so the socket lives on the bind-mounted host filesystem
+  return `${workspaceRoot}/tools/auto-dev/state/auto-dev.sock`;
+};
 
 export class Orchestrator {
   private readonly workspaceRoot: string;
@@ -65,6 +81,8 @@ export class Orchestrator {
   private readonly processedCommentIds: Set<string> = new Set();
   private commentPollTimer: ReturnType<typeof setTimeout> | null = null;
   private prTriggerPollTimer: ReturnType<typeof setTimeout> | null = null;
+  private issueCommentPollTimer: ReturnType<typeof setTimeout> | null = null;
+  private lifecyclePollTimer: ReturnType<typeof setTimeout> | null = null;
 
   private static readonly COMMENT_POLL_INTERVAL_MS = 15_000;
 
@@ -89,7 +107,7 @@ export class Orchestrator {
     this.issueWatcher = new IssueWatcher();
 
     this.socketServer = new DecisionSocketServer({
-      socketPath: process.env.AUTO_DEV_SOCKET ?? DEFAULT_SOCKET_PATH,
+      socketPath: resolveSocketPath(this.workspaceRoot),
       config: this.config,
       workspaceRoot: this.workspaceRoot,
       onDecisionRequest: async (request) => {
@@ -172,10 +190,33 @@ export class Orchestrator {
     // Startup cleanup: remove orphaned containers and stale registry entries
     await this.startupCleanup();
 
+    // Reconstruct activeRuns from persisted state to avoid in-memory loss across restarts
+    this.rebuildActiveRuns();
+
     this.polling = true;
     void this.pollLoop();
     this.startCommentPoller();
     this.startPRTriggerPoller();
+    this.startIssueCommentPoller();
+    this.startLifecyclePoller();
+  }
+
+  /**
+   * Reconstruct the in-memory activeRuns map from persisted workflow state.
+   * Prevents duplicate processing after container/process restart.
+   */
+  private rebuildActiveRuns(): void {
+    const activeRunsFromStore = listWorkflowRuns(this.workspaceRoot).filter(
+      (r) => !["completed", "failed", "workspace_ready"].includes(r.status),
+    );
+    for (const run of activeRunsFromStore) {
+      this.activeRuns.set(run.id, run.issueNumber);
+    }
+    if (activeRunsFromStore.length > 0) {
+      logger.info(
+        `[auto-dev] Restored ${activeRunsFromStore.length} active run(s) from persisted state`,
+      );
+    }
   }
 
   private async startupCleanup(): Promise<void> {
@@ -277,6 +318,8 @@ export class Orchestrator {
     if (this.pollTimer) clearTimeout(this.pollTimer);
     if (this.commentPollTimer) clearTimeout(this.commentPollTimer);
     if (this.prTriggerPollTimer) clearTimeout(this.prTriggerPollTimer);
+    if (this.issueCommentPollTimer) clearTimeout(this.issueCommentPollTimer);
+    if (this.lifecyclePollTimer) clearTimeout(this.lifecyclePollTimer);
     await this.socketServer?.stop();
   }
 
@@ -292,9 +335,19 @@ export class Orchestrator {
           this.workspaceRoot,
         );
 
+        const maxConcurrent = this.config!.maxConcurrentRuns;
+        const available = maxConcurrent - this.activeRuns.size;
+        const toProcess = results.slice(0, Math.max(0, available));
+
+        if (results.length > toProcess.length) {
+          logger.info(
+            `[auto-dev] ${results.length} issue(s) ready, deferring ${results.length - toProcess.length} (concurrent limit: ${maxConcurrent})`,
+          );
+        }
+
         // oxlint-disable-next-line no-await-in-loop
         await Promise.all(
-          results.map(async (result) => this.handleNewIssue(result)),
+          toProcess.map(async (result) => this.handleNewIssue(result)),
         );
       } catch (err) {
         logger.error(`[auto-dev] Poll cycle error: ${String(err)}`);
@@ -322,7 +375,8 @@ export class Orchestrator {
     logger.info(
       `[auto-dev] Claimed issue #${result.issueNumber}, run ${run.id}`,
     );
-    this.activeRuns.set(run.id, result.issueNumber);
+    // NOTE: workspace_ready runs are NOT counted in activeRuns (concurrency limit)
+    // They are added to activeRuns only when @autodev create-pr triggers the agent
 
     // 1. Claim: add label
     try {
@@ -336,12 +390,8 @@ export class Orchestrator {
     }
 
     // 2. Create workspace (branch + worktree + devcontainer)
-    let workspaceInfo: WorkspaceInfo | null = null;
     try {
-      workspaceInfo = await this.workspaceManager!.create(
-        result.issueNumber,
-        run.id,
-      );
+      await this.workspaceManager!.create(result.issueNumber, run.id);
       logger.info(
         `[auto-dev] Branch ${run.branch} + workspace created for issue #${result.issueNumber}`,
       );
@@ -361,24 +411,124 @@ export class Orchestrator {
       return;
     }
 
-    // 3. PR-First: initial commit, push, create PR
-    let prNumber: number | null = null;
+    // 3. Workspace ready: post comment and set status — PR will be created on demand
+    await this.workflowManager!.updateStatus(run.id, "workspace_ready");
+
     try {
-      this.workspaceManager!.getGitManager().commitAndPush(
+      createComment(
+        this.repoFullName,
+        result.issueNumber,
+        renderWorkspaceReadyComment(run),
+      );
+    } catch (err) {
+      logger.error(
+        `[auto-dev] Failed to post workspace-ready comment for #${result.issueNumber}: ${String(err)}`,
+      );
+    }
+  }
+
+  // ── Issue @autodev comment trigger ──────────────────────────────────
+
+  /** Handle `@autodev create-pr` or `@autodev <message>` in an issue comment. */
+  private async handleIssueCommentTrigger(
+    run: WorkflowRun,
+    commentId: number,
+    commentBody: string,
+    author: string,
+  ): Promise<void> {
+    // Extract instruction after @autodev
+    const match = commentBody.match(/@autodev\b(.*)/is);
+    if (!match) return;
+    const instruction = match[1].trim();
+
+    // Add "eyes" reaction to acknowledge
+    try {
+      addCommentReaction(this.repoFullName, commentId, "eyes");
+    } catch {
+      /* best-effort */
+    }
+
+    if (/^create-pr(\s|$)/i.test(instruction)) {
+      // Handle @autodev create-pr
+      await this.handleCreatePR(run);
+    } else {
+      // Handle @autodev <message> — dispatch issue-responder agent
+      await this.handleIssueAgentResponse(run, instruction, author);
+    }
+  }
+
+  /** Create a Draft PR for the given workspace_ready run. */
+  private async handleCreatePR(run: WorkflowRun): Promise<void> {
+    if (run.prNumber) {
+      // PR already exists — check if it's still open
+      try {
+        const prState = getPRState(this.repoFullName, run.prNumber);
+        if (prState.state === "OPEN") {
+          logger.info(
+            `[auto-dev] PR #${run.prNumber} already open for issue #${run.issueNumber} — skipping create-pr`,
+          );
+          try {
+            createComment(
+              this.repoFullName,
+              run.issueNumber,
+              `<!-- auto-dev-bot -->\n\nPR #${run.prNumber} is already open.`,
+            );
+          } catch {
+            /* best-effort */
+          }
+          return;
+        }
+      } catch {
+        /* continue to create PR */
+      }
+    }
+
+    // Ensure workspace exists
+    let workspaceInfo: WorkspaceInfo | null = null;
+    try {
+      workspaceInfo = await this.workspaceManager!.ensure(
+        run.issueNumber,
+        run.id,
         run.branch,
-        `chore: auto-dev init for issue #${result.issueNumber}`,
+      );
+    } catch (err) {
+      logger.error(
+        `[auto-dev] Failed to ensure workspace for create-pr issue #${run.issueNumber}: ${String(err)}`,
+      );
+      return;
+    }
+
+    // Commit + push
+    try {
+      await this.workspaceManager!.getGitManager().commitAndPush(
+        run.branch,
+        `chore: auto-dev init for issue #${run.issueNumber}`,
         workspaceInfo.worktreePath,
       );
+    } catch (err) {
+      logger.error(
+        `[auto-dev] Failed to push for create-pr issue #${run.issueNumber}: ${String(err)}`,
+      );
+    }
 
-      const prTitle = result.title;
-      const prBody = `Closes #${result.issueNumber}\n\nRun ID: \`${run.id}\``;
-      const pr = this.prManager!.create(run.branch, prTitle, prBody, "main");
+    // Create Draft PR
+    let prNumber: number | null = null;
+    try {
+      const prTitle = `[Auto-Dev] Issue #${run.issueNumber}`;
+      const prBody = `Closes #${run.issueNumber}\n\nRun ID: \`${run.id}\``;
+      const pr = this.prManager!.create(
+        run.branch,
+        prTitle,
+        prBody,
+        "main",
+        true,
+      );
       prNumber = pr.number;
       run.prNumber = prNumber;
       await saveWorkflowRun(this.workspaceRoot, run);
 
       logger.info(
-        `[auto-dev] PR #${prNumber} created for issue #${result.issueNumber}`,
+        `[auto-dev] Draft PR #${prNumber} created for issue #${run.issueNumber}`,
       );
 
       try {
@@ -386,29 +536,27 @@ export class Orchestrator {
           this.repoFullName,
           prNumber,
           renderWorkspaceComment(run, {
-            model: result.agentModel,
-            effort: result.agentEffort,
+            model: run.agentModel,
+            effort: run.agentEffort,
             maxDecisions: this.config!.maxDecisionPerRun,
-            agentDefinition: result.agentDefinition,
+            agentDefinition: run.agentDefinition,
             autoMerge: true,
-            issueTitle: result.title,
-            issueBody: result.body,
+            issueTitle: `Issue #${run.issueNumber}`,
+            issueBody: "",
           }),
         );
-      } catch (err) {
-        logger.error(
-          `[auto-dev] Failed to post PR workspace comment: ${String(err)}`,
-        );
+      } catch {
+        /* best-effort */
       }
 
       try {
         createComment(
           this.repoFullName,
-          result.issueNumber,
-          renderClaimComment(run, prNumber),
+          run.issueNumber,
+          renderCreatePRComment(run, prNumber, pr.url),
         );
-      } catch (err) {
-        logger.error(`[auto-dev] Failed to post claim comment: ${String(err)}`);
+      } catch {
+        /* best-effort */
       }
 
       this.auditLogger!.log({
@@ -420,27 +568,29 @@ export class Orchestrator {
       });
     } catch (err) {
       logger.error(
-        `[auto-dev] PR creation failed for #${result.issueNumber}: ${String(err)}`,
+        `[auto-dev] Draft PR creation failed for issue #${run.issueNumber}: ${String(err)}`,
       );
       try {
         createComment(
           this.repoFullName,
-          result.issueNumber,
-          `<!-- auto-dev-bot -->\n\nPR creation failed: ${String(err)}. Branch pushed at \`${run.branch}\`.`,
+          run.issueNumber,
+          `<!-- auto-dev-bot -->\n\nFailed to create Draft PR: ${String(err)}`,
         );
       } catch {
         /* best-effort */
       }
+      return;
     }
 
+    // Update status to running and dispatch agent
     await this.workflowManager!.updateStatus(run.id, "running");
-    const agentDef = result.agentDefinition ?? this.config!.defaultAgent;
+    this.activeRuns.set(run.id, run.issueNumber);
+
+    const agentDef = run.agentDefinition ?? this.config!.defaultAgent;
     const agentDefinitionFile = this.config!.agents[agentDef]?.definition;
 
     const issueContext = [
-      `## Issue #${result.issueNumber}: ${result.title}`,
-      "",
-      result.body,
+      `## Issue #${run.issueNumber}`,
       "",
       "## Instructions",
       "- Work in the current directory (the git worktree for this issue)",
@@ -450,6 +600,7 @@ export class Orchestrator {
       "## Metadata",
       `- Repo: ${this.repoFullName}`,
       `- Branch: ${run.branch}`,
+      `- PR: #${prNumber}`,
       `- Run ID: ${run.id}`,
     ].join("\n");
 
@@ -458,7 +609,7 @@ export class Orchestrator {
       workflowRunId: run.id,
       timestamp: new Date().toISOString(),
       type: "workflow_started",
-      payload: { provider: "claude-code", agentDef },
+      payload: { provider: "claude-code", agentDef, trigger: "create_pr" },
     });
 
     try {
@@ -466,11 +617,14 @@ export class Orchestrator {
         issueContext,
         agentDefinition: agentDef,
         agentDefinitionFile,
-        model: result.agentModel,
-        effort: result.agentEffort,
+        model: run.agentModel,
+        effort: run.agentEffort,
         workspaceRoot: this.workspaceRoot,
-        agentWorkdir: workspaceInfo.worktreePath,
+        agentWorkdir: workspaceInfo.containerId
+          ? workspaceInfo.remoteWorkspaceFolder
+          : workspaceInfo.worktreePath,
         containerId: workspaceInfo.containerId,
+        workflowRunId: run.id,
       })) {
         if (event.type === "stdout" && event.data) {
           this.auditLogger!.log({
@@ -490,16 +644,13 @@ export class Orchestrator {
           this.activeRuns.delete(run.id);
           await this.workflowManager!.updateStatus(run.id, finalStatus);
 
-          // Push agent's local commits BEFORE enabling auto-merge so the PR
-          // includes the agent's commits when it merges.
           if (workspaceInfo && run.branch && code === 0) {
-            this.workspaceManager!.getGitManager().tryPush(
+            await this.workspaceManager!.getGitManager().tryPush(
               run.branch,
               workspaceInfo.worktreePath,
             );
           }
 
-          // Enable auto-merge on successful completion
           if (code === 0 && prNumber) {
             try {
               this.prManager!.enableAutoMerge(prNumber);
@@ -518,11 +669,9 @@ export class Orchestrator {
             type: code === 0 ? "workflow_completed" : "workflow_failed",
             payload: { exitCode: code },
           });
-          logger.info(
-            `[auto-dev] Run ${run.id} finished with status=${finalStatus} (exit ${code})`,
-          );
+
           try {
-            removeIssueLabels(this.repoFullName, result.issueNumber, [
+            removeIssueLabels(this.repoFullName, run.issueNumber, [
               "auto-dev:ready",
               "auto-dev:claimed",
             ]);
@@ -530,7 +679,6 @@ export class Orchestrator {
             /* best-effort */
           }
 
-          // Build completion comment
           const startedAt = new Date(run.startedAt).getTime();
           const durationSec = Math.round((Date.now() - startedAt) / 1000);
           const duration = `${Math.floor(durationSec / 60)}m ${durationSec % 60}s`;
@@ -547,36 +695,35 @@ export class Orchestrator {
 
           const pushFn =
             workspaceInfo && run.branch
-              ? () =>
+              ? async () =>
                   this.workspaceManager!.getGitManager().tryPush(
                     run.branch,
                     workspaceInfo.worktreePath,
                   )
               : null;
 
-          if (run.prNumber) {
-            const prCommentBody = renderCompletionComment(
-              run,
-              finalStatus,
-              code,
-              changedFiles,
-              run.decisionCount,
-              result.agentModel,
-              result.agentDefinition,
-              duration,
-            );
-            const issueCommentBody = renderIssueCompletionComment(
-              run.prNumber,
-              finalStatus,
-            );
+          if (prNumber) {
             await this.pushAndComment(
               pushFn,
               () => {
-                createComment(this.repoFullName, run.prNumber!, prCommentBody);
                 createComment(
                   this.repoFullName,
-                  result.issueNumber,
-                  issueCommentBody,
+                  prNumber,
+                  renderCompletionComment(
+                    run,
+                    finalStatus,
+                    code,
+                    changedFiles,
+                    run.decisionCount,
+                    run.agentModel,
+                    run.agentDefinition,
+                    duration,
+                  ),
+                );
+                createComment(
+                  this.repoFullName,
+                  run.issueNumber,
+                  renderIssueCompletionComment(prNumber, finalStatus),
                 );
               },
               `completion-run-${run.id}`,
@@ -588,7 +735,7 @@ export class Orchestrator {
                 const emoji = code === 0 ? "completed" : "failed";
                 createComment(
                   this.repoFullName,
-                  result.issueNumber,
+                  run.issueNumber,
                   `<!-- auto-dev-bot -->\n\n**Auto-Dev** workflow **${emoji}** (exit ${code}).\n\nRun ID: \`${run.id}\``,
                 );
               },
@@ -596,10 +743,9 @@ export class Orchestrator {
             );
           }
 
-          // Clean up workspace
           if (workspaceInfo) {
             await this.workspaceManager!.destroy(workspaceInfo);
-            await unregisterWorkspace(this.workspaceRoot, result.issueNumber);
+            await unregisterWorkspace(this.workspaceRoot, run.issueNumber);
           }
         }
       }
@@ -610,7 +756,7 @@ export class Orchestrator {
       this.activeRuns.delete(run.id);
       await this.workflowManager!.updateStatus(run.id, "failed");
       try {
-        removeIssueLabels(this.repoFullName, result.issueNumber, [
+        removeIssueLabels(this.repoFullName, run.issueNumber, [
           "auto-dev:ready",
           "auto-dev:claimed",
         ]);
@@ -619,9 +765,271 @@ export class Orchestrator {
       }
       if (workspaceInfo) {
         await this.workspaceManager!.destroy(workspaceInfo);
-        await unregisterWorkspace(this.workspaceRoot, result.issueNumber);
+        await unregisterWorkspace(this.workspaceRoot, run.issueNumber);
       }
     }
+  }
+
+  /** Dispatch issue-responder agent and post result to issue comment. */
+  private async handleIssueAgentResponse(
+    run: WorkflowRun,
+    instruction: string,
+    _author: string,
+  ): Promise<void> {
+    // Ensure workspace
+    let workspaceInfo: WorkspaceInfo | null = null;
+    try {
+      workspaceInfo = await this.workspaceManager!.ensure(
+        run.issueNumber,
+        run.id,
+        run.branch,
+      );
+    } catch (err) {
+      logger.error(
+        `[auto-dev] Failed to ensure workspace for issue responder #${run.issueNumber}: ${String(err)}`,
+      );
+      return;
+    }
+
+    const issueContext = [
+      `## Issue #${run.issueNumber}`,
+      "",
+      "## User Request",
+      "",
+      instruction,
+      "",
+      "## Instructions",
+      "- You are working in the worktree for this issue",
+      "- Respond with a helpful analysis or answer",
+      "- Do NOT make code changes unless explicitly asked",
+      "- Do NOT commit or push",
+    ].join("\n");
+
+    const agentDefinitionFile =
+      this.config!.agents["issue-responder"]?.definition ??
+      ".claude/agents/issue-responder.md";
+
+    let rawStdout = "";
+    try {
+      for await (const event of this.dispatcher!.dispatch("claude-code", {
+        issueContext,
+        agentDefinition: "issue-responder",
+        agentDefinitionFile,
+        model: run.agentModel,
+        effort: run.agentEffort,
+        workspaceRoot: this.workspaceRoot,
+        agentWorkdir: workspaceInfo.containerId
+          ? workspaceInfo.remoteWorkspaceFolder
+          : workspaceInfo.worktreePath,
+        containerId: workspaceInfo.containerId,
+        workflowRunId: run.id,
+      })) {
+        if (event.type === "stdout" && event.data) {
+          rawStdout += event.data;
+        } else if (event.type === "exit") {
+          break;
+        }
+      }
+    } catch (err) {
+      logger.error(
+        `[auto-dev] Issue responder agent error for #${run.issueNumber}: ${String(err)}`,
+      );
+      return;
+    }
+
+    // Claude emits a JSON event stream; extract the final `result` text.
+    let responseText = "";
+    for (const line of rawStdout.split("\n")) {
+      try {
+        const raw: unknown = JSON.parse(line);
+        if (
+          raw !== null &&
+          typeof raw === "object" &&
+          "type" in raw &&
+          "subtype" in raw &&
+          "result" in raw
+        ) {
+          const parsed = raw as {
+            type: unknown;
+            subtype: unknown;
+            result: unknown;
+          };
+          if (
+            parsed.type === "result" &&
+            parsed.subtype === "success" &&
+            typeof parsed.result === "string"
+          ) {
+            responseText = parsed.result;
+            break;
+          }
+        }
+      } catch {
+        /* not JSON, skip */
+      }
+    }
+    // Fall back to raw stdout if no structured result found
+    if (!responseText) {
+      responseText = rawStdout;
+    }
+
+    // Post agent response as issue comment
+    const trimmed = responseText.trim();
+    if (trimmed) {
+      try {
+        createComment(
+          this.repoFullName,
+          run.issueNumber,
+          renderIssueAgentResponse(trimmed),
+        );
+      } catch (err) {
+        logger.error(
+          `[auto-dev] Failed to post agent response for issue #${run.issueNumber}: ${String(err)}`,
+        );
+      }
+    }
+  }
+
+  // ── Issue comment poller (workspace_ready runs) ──────────────────────
+
+  private startIssueCommentPoller(): void {
+    const poll = async () => {
+      try {
+        const workspaceReadyRuns = listWorkflowRuns(this.workspaceRoot).filter(
+          (r) => r.status === "workspace_ready",
+        );
+
+        for (const run of workspaceReadyRuns) {
+          // oxlint-disable-next-line no-await-in-loop
+          await this.pollIssueCommentsForRun(run);
+        }
+      } catch (err) {
+        logger.error(`[auto-dev] Issue comment poller error: ${String(err)}`);
+      }
+      this.issueCommentPollTimer = setTimeout(
+        () => void poll(),
+        Orchestrator.COMMENT_POLL_INTERVAL_MS,
+      );
+    };
+    this.issueCommentPollTimer = setTimeout(
+      () => void poll(),
+      Orchestrator.COMMENT_POLL_INTERVAL_MS,
+    );
+  }
+
+  private async pollIssueCommentsForRun(run: WorkflowRun): Promise<void> {
+    try {
+      const comments = listIssueComments(this.repoFullName, run.issueNumber);
+      for (const comment of comments) {
+        if (this.processedCommentIds.has(comment.id)) continue;
+        this.processedCommentIds.add(comment.id);
+        if (comment.body.includes("<!-- auto-dev-bot -->")) continue;
+
+        const author = comment.user?.login ?? comment.author?.login ?? "";
+        if (author && !isAllowedUser(author)) continue;
+
+        if (!/@autodev\b/i.test(comment.body)) continue;
+
+        logger.info(
+          `[auto-dev] Issue #${run.issueNumber} @autodev trigger from @${author}`,
+        );
+
+        // Only one trigger at a time per run
+        // oxlint-disable-next-line no-await-in-loop
+        await this.handleIssueCommentTrigger(
+          run,
+          parseInt(comment.id, 10),
+          comment.body,
+          author,
+        );
+        break;
+      }
+    } catch (err) {
+      logger.error(
+        `[auto-dev] Issue comment poll error for #${run.issueNumber}: ${String(err)}`,
+      );
+    }
+  }
+
+  // ── Lifecycle poller (cleanup closed issues / merged PRs) ───────────
+
+  private startLifecyclePoller(): void {
+    const LIFECYCLE_POLL_INTERVAL_MS = 60_000;
+    const poll = async () => {
+      try {
+        await this.lifecycleCheck();
+      } catch (err) {
+        logger.error(`[auto-dev] Lifecycle poller error: ${String(err)}`);
+      }
+      this.lifecyclePollTimer = setTimeout(
+        () => void poll(),
+        LIFECYCLE_POLL_INTERVAL_MS,
+      );
+    };
+    this.lifecyclePollTimer = setTimeout(
+      () => void poll(),
+      LIFECYCLE_POLL_INTERVAL_MS,
+    );
+  }
+
+  private async lifecycleCheck(): Promise<void> {
+    const runs = listWorkflowRuns(this.workspaceRoot).filter(
+      (r) => r.status === "workspace_ready" || r.status === "running",
+    );
+
+    for (const run of runs) {
+      try {
+        // Check if issue is closed
+        // oxlint-disable-next-line no-await-in-loop
+        const issueState = getIssueState(this.repoFullName, run.issueNumber);
+        if (issueState !== "OPEN") {
+          logger.info(
+            `[auto-dev] Issue #${run.issueNumber} is closed — cleaning up workspace`,
+          );
+          // oxlint-disable-next-line no-await-in-loop
+          await this.cleanupRun(run);
+          continue;
+        }
+
+        // Check if PR is merged
+        if (run.prNumber) {
+          // oxlint-disable-next-line no-await-in-loop
+          const prState = getPRState(this.repoFullName, run.prNumber);
+          if (prState.state === "MERGED") {
+            logger.info(
+              `[auto-dev] PR #${run.prNumber} merged — cleaning up workspace for issue #${run.issueNumber}`,
+            );
+            // oxlint-disable-next-line no-await-in-loop
+            await this.cleanupRun(run);
+          }
+        }
+      } catch {
+        /* best-effort: gh call may fail for deleted issues */
+      }
+    }
+  }
+
+  private async cleanupRun(run: WorkflowRun): Promise<void> {
+    try {
+      const allWorkspaces = listAllWorkspaces(this.workspaceRoot);
+      const ws = allWorkspaces.find((w) => w.issueNumber === run.issueNumber);
+      if (ws) {
+        // oxlint-disable-next-line no-unsafe-type-assertion
+        await this.workspaceManager!.destroy(ws as unknown as WorkspaceInfo);
+      }
+    } catch {
+      /* best-effort */
+    }
+    try {
+      await unregisterWorkspace(this.workspaceRoot, run.issueNumber);
+    } catch {
+      /* best-effort */
+    }
+    try {
+      await this.workflowManager!.updateStatus(run.id, "completed");
+    } catch {
+      /* best-effort */
+    }
+    this.activeRuns.delete(run.id);
   }
 
   // ── PR re-trigger (@autodev) ─────────────────────────────────────────
@@ -685,6 +1093,16 @@ export class Orchestrator {
       /* best-effort */
     }
 
+    // Sync worktree to latest remote state before dispatching agent
+    try {
+      this.workspaceManager!.getGitManager().syncWorktree(
+        run.branch,
+        workspaceInfo.worktreePath,
+      );
+    } catch {
+      /* best-effort */
+    }
+
     this.auditLogger!.log({
       id: randomUUID(),
       workflowRunId: run.id,
@@ -705,8 +1123,11 @@ export class Orchestrator {
         model,
         effort,
         workspaceRoot: this.workspaceRoot,
-        agentWorkdir: workspaceInfo.worktreePath,
+        agentWorkdir: workspaceInfo.containerId
+          ? workspaceInfo.remoteWorkspaceFolder
+          : workspaceInfo.worktreePath,
         containerId: workspaceInfo.containerId,
+        workflowRunId: run.id,
       })) {
         if (event.type === "exit") {
           const code = event.exitCode ?? 0;
@@ -714,7 +1135,7 @@ export class Orchestrator {
             `[auto-dev] Re-trigger agent for PR #${prNumber} completed (exit ${code})`,
           );
           await this.pushAndComment(
-            () =>
+            async () =>
               this.workspaceManager!.getGitManager().tryPush(
                 run.branch,
                 workspaceInfo.worktreePath,
@@ -953,7 +1374,7 @@ export class Orchestrator {
   // ── Shared helpers ──────────────────────────────────────────────────
 
   private async pushAndComment(
-    pushFn: (() => boolean) | null,
+    pushFn: (() => Promise<boolean>) | null,
     commentFn: () => void,
     label = "comment",
     maxAttempts = 45,
@@ -964,7 +1385,8 @@ export class Orchestrator {
     for (let i = 0; i < maxAttempts; i += 1) {
       let pushOk = pushFn === null;
       if (pushFn) {
-        pushOk = pushFn();
+        // oxlint-disable-next-line no-await-in-loop
+        pushOk = await pushFn();
       }
       if (!commented && (!requirePushFirst || pushOk)) {
         try {

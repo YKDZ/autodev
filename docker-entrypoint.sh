@@ -24,7 +24,14 @@ mkdir -p /var/run/sshd
 
 REPO_FULL_NAME="${GITHUB_REPOSITORY:-owner/repo}"
 DIST="/opt/auto-dev/dist/cli.js"
-GIT_WORKSPACE_ROOT="/opt/repo"
+GIT_WORKSPACE_ROOT="${AUTO_DEV_WORKSPACE_ROOT:-/opt/repo}"
+
+# If GITHUB_APP_PRIVATE_KEY_PATH is provided, read key from file
+if [ -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ] && [ -z "${GITHUB_APP_PRIVATE_KEY:-}" ]; then
+  GITHUB_APP_PRIVATE_KEY="$(cat "${GITHUB_APP_PRIVATE_KEY_PATH}")"
+  export GITHUB_APP_PRIVATE_KEY
+  echo "[auto-dev] GitHub App private key loaded from ${GITHUB_APP_PRIVATE_KEY_PATH}"
+fi
 
 # Obtain GitHub token via GitHub App (required: GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_APP_INSTALLATION_ID)
 GITHUB_TOKEN="$(node /opt/auto-dev/dist/scripts/get-installation-token.js)"
@@ -35,6 +42,10 @@ fi
 echo "[auto-dev] GitHub App token obtained."
 export GITHUB_TOKEN
 export GH_TOKEN="${GITHUB_TOKEN}"
+
+# Disable git hooks globally to avoid git-lfs post-checkout hook failures
+# (git-lfs may not be installed; LFS is only used for binary assets, not agent code)
+git config --global core.hooksPath /dev/null
 
 # Clone / update the repo
 if ! git -C "${GIT_WORKSPACE_ROOT}" rev-parse --git-dir > /dev/null 2>&1; then

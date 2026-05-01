@@ -1,6 +1,8 @@
 /* oxlint-disable typescript-eslint/no-unsafe-type-assertion -- SQLite returns Record<string, unknown> */
 
 import {
+  cpSync,
+  chmodSync,
   existsSync,
   readFileSync,
   readdirSync,
@@ -461,6 +463,23 @@ export const loadCoordinatorState = (
 export const ensureStateDirs = async (workspaceRoot: string): Promise<void> => {
   const stateDir = `${workspaceRoot}/tools/auto-dev/state`;
   mkdirSync(stateDir, { recursive: true });
+
+  // Publish the auto-dev CLI into the state dir so devcontainers can invoke it.
+  // The state dir is bind-mounted at /var/run/auto-dev inside devcontainers, so
+  // placing the binary and dist/ there makes `auto-dev` available on PATH.
+  // Always sync on startup so that upgrades are picked up automatically.
+  const sourceDistDir = "/opt/auto-dev/dist";
+  if (existsSync(sourceDistDir)) {
+    const targetDistDir = `${stateDir}/dist`;
+    cpSync(sourceDistDir, targetDistDir, { recursive: true, force: true });
+    const autoDevBin = `${stateDir}/auto-dev`;
+    writeFileSync(
+      autoDevBin,
+      '#!/bin/bash\nexec node /var/run/auto-dev/dist/cli.js "$@"\n',
+    );
+    chmodSync(autoDevBin, 0o755);
+  }
+
   // Run migration on first access
   migrateFromJson(workspaceRoot);
 };

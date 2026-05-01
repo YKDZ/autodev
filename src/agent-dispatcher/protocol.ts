@@ -20,6 +20,8 @@ export interface AgentContext {
   agentWorkdir?: string;
   /** Container ID for docker exec. When set, the agent runs inside the container instead of as a local subprocess. */
   containerId?: string;
+  /** Workflow run ID, passed as AUTO_DEV_RUN_ID env var so agents can call auto-dev request-decision. */
+  workflowRunId?: string;
 }
 
 export interface AgentInvoker {
