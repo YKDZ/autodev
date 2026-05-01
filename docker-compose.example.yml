@@ -26,6 +26,7 @@ services:
 
     ports:
       - "${SSH_PORT:-2222}:22"
+      - "${AUTO_DEV_DECISION_PORT:-3000}:3000"
 
     environment:
       # GitHub App credentials (required)
@@ -47,6 +48,11 @@ services:
       AUTO_DEV_DEFAULT_AGENT: "${AUTO_DEV_DEFAULT_AGENT:-full-pipeline}"
       AUTO_DEV_MAX_DECISION_PER_RUN: "${AUTO_DEV_MAX_DECISION_PER_RUN:-20}"
       AUTO_DEV_MAX_IMPL_CYCLES: "${AUTO_DEV_MAX_IMPL_CYCLES:-5}"
+      # Decision server TCP configuration (optional)
+      # AUTO_DEV_DECISION_HOST is advertised to agent containers — defaults to the
+      # orchestrator container's non-loopback IP. Set explicitly if needed.
+      AUTO_DEV_DECISION_HOST: "${AUTO_DEV_DECISION_HOST:-}"
+      AUTO_DEV_DECISION_PORT: "${AUTO_DEV_DECISION_PORT:-3000}"
 
     volumes:
       # Mount Docker socket for devcontainer management

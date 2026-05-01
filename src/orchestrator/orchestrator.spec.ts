@@ -22,21 +22,24 @@ import { ensureStateDirs } from "../state-store/index.js";
 import { Orchestrator } from "./orchestrator.js";
 
 let tmpDir: string;
-let oldSocketPath: string | undefined;
+let oldDecisionPort: string | undefined;
 
 beforeEach(async () => {
   tmpDir = mkdtempSync(resolve(tmpdir(), "coord-test-"));
-  oldSocketPath = process.env.AUTO_DEV_SOCKET;
-  process.env.AUTO_DEV_SOCKET = resolve(tmpDir, "test.sock");
+  oldDecisionPort = process.env.AUTO_DEV_DECISION_PORT;
+  // Use a random high port for tests to avoid conflicts
+  process.env.AUTO_DEV_DECISION_PORT = String(30000 + Math.floor(Math.random() * 10000));
+  process.env.AUTO_DEV_DECISION_HOST = "127.0.0.1";
   await ensureStateDirs(tmpDir);
 });
 
 afterEach(async () => {
-  if (oldSocketPath) {
-    process.env.AUTO_DEV_SOCKET = oldSocketPath;
+  if (oldDecisionPort) {
+    process.env.AUTO_DEV_DECISION_PORT = oldDecisionPort;
   } else {
-    delete process.env.AUTO_DEV_SOCKET;
+    delete process.env.AUTO_DEV_DECISION_PORT;
   }
+  delete process.env.AUTO_DEV_DECISION_HOST;
   await rm(tmpDir, { recursive: true, force: true });
 });
 

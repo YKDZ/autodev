@@ -70,14 +70,13 @@ export class ClaudeCodeAdapter implements AgentInvoker {
       GIT_AUTHOR_EMAIL: "auto-dev[bot]@users.noreply.github.com",
       GIT_COMMITTER_NAME: "Auto-Dev Bot",
       GIT_COMMITTER_EMAIL: "auto-dev[bot]@users.noreply.github.com",
-      // When running in a devcontainer, point the decision socket to the
-      // bind-mounted path inside the container (/var/run/auto-dev/auto-dev.sock).
-      // The state/ dir is bind-mounted there by DevcontainerManager.start().
-      // Also expose the auto-dev CLI (copied into state/ by ensureStateDirs)
-      // on PATH so agents can call `auto-dev request-decision`.
+      // When running in a devcontainer, inject the TCP decision server address
+      // so agents can call `auto-dev request-decision` via TCP instead of Unix socket.
+      // Also expose the auto-dev CLI on PATH so agents can call it.
       ...(context.containerId
         ? {
-            AUTO_DEV_SOCKET: "/var/run/auto-dev/auto-dev.sock",
+            AUTO_DEV_DECISION_HOST: context.decisionHost ?? "host.docker.internal",
+            AUTO_DEV_DECISION_PORT: String(context.decisionPort ?? 3000),
             PATH: "/var/run/auto-dev:/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
           }
         : {}),

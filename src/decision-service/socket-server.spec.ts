@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { createConnection } from "node:net";
+import { createConnection, createServer as netCreateServer } from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -13,7 +13,7 @@ import { DEFAULT_CONFIG } from "../config/types.js";
 import { DecisionSocketServer } from "./socket-server.js";
 
 let tmpDir: string;
-let socketPath: string;
+let testPort: number;
 let server: DecisionSocketServer;
 
 const noopAccept = vi
@@ -21,11 +21,26 @@ const noopAccept = vi
   .mockResolvedValue({ accepted: true, remainingDecisions: 19 });
 const noopGetResolution = vi.fn().mockResolvedValue(null);
 
+/** Allocate a free TCP port by letting the OS assign one. */
+const getFreePort = async (): Promise<number> =>
+  new Promise((resolvePort, reject) => {
+    const srv = netCreateServer();
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      if (!addr || typeof addr === "string") {
+        reject(new Error("Unexpected address type"));
+        return;
+      }
+      srv.close(() => { resolvePort(addr.port); });
+    });
+    srv.on("error", reject);
+  });
+
 beforeEach(async () => {
   tmpDir = mkdtempSync(resolve(tmpdir(), "socket-test-"));
-  socketPath = resolve(tmpDir, "auto-dev.sock");
+  testPort = await getFreePort();
   server = new DecisionSocketServer({
-    socketPath,
+    port: testPort,
     config: DEFAULT_CONFIG,
     workspaceRoot: tmpDir,
     onDecisionRequest: noopAccept,
@@ -48,9 +63,16 @@ const makeRequest = (): DecisionRequest => ({
 });
 
 describe("DecisionSocketServer", () => {
-  it("starts and listens on socket path", async () => {
+  it("starts and listens on TCP port", async () => {
     await server.start();
-    expect(existsSync(socketPath)).toBe(true);
+    // Verify we can connect to the port
+    await new Promise<void>((resolvePromise, reject) => {
+      const conn = createConnection(testPort, "127.0.0.1", () => {
+        conn.destroy();
+        resolvePromise();
+      });
+      conn.on("error", reject);
+    });
   });
 
   it("client connects and sends decision request", async () => {
@@ -58,7 +80,7 @@ describe("DecisionSocketServer", () => {
     const request = makeRequest();
 
     const result = await new Promise<string>((resolvePromise, reject) => {
-      const socket = createConnection(socketPath, () => {
+      const socket = createConnection(testPort, "127.0.0.1", () => {
         socket.write(JSON.stringify(request) + "\n");
       });
 
@@ -83,7 +105,7 @@ describe("DecisionSocketServer", () => {
     const request = makeRequest();
 
     await new Promise<void>((resolvePromise, reject) => {
-      const socket = createConnection(socketPath, () => {
+      const socket = createConnection(testPort, "127.0.0.1", () => {
         socket.write(JSON.stringify(request) + "\n");
       });
 
@@ -102,7 +124,7 @@ describe("DecisionSocketServer", () => {
     const request = makeRequest();
 
     const responsePromise = new Promise<string>((resolvePromise, reject) => {
-      const socket = createConnection(socketPath, () => {
+      const socket = createConnection(testPort, "127.0.0.1", () => {
         socket.write(JSON.stringify(request) + "\n");
       });
 
@@ -139,8 +161,9 @@ describe("DecisionSocketServer", () => {
   }, 10000);
 
   it("rejects when onDecisionRequest returns false", async () => {
+    const rejectPort = await getFreePort();
     const rejectServer = new DecisionSocketServer({
-      socketPath: resolve(tmpDir, "reject.sock"),
+      port: rejectPort,
       config: DEFAULT_CONFIG,
       workspaceRoot: tmpDir,
       onDecisionRequest: vi
@@ -153,7 +176,7 @@ describe("DecisionSocketServer", () => {
     const request = makeRequest();
 
     const result = await new Promise<string>((resolvePromise, reject) => {
-      const socket = createConnection(resolve(tmpDir, "reject.sock"), () => {
+      const socket = createConnection(rejectPort, "127.0.0.1", () => {
         socket.write(JSON.stringify(request) + "\n");
       });
 
@@ -181,7 +204,7 @@ describe("DecisionSocketServer", () => {
     await server.start();
 
     const result = await new Promise<string>((resolvePromise, reject) => {
-      const socket = createConnection(socketPath, () => {
+      const socket = createConnection(testPort, "127.0.0.1", () => {
         socket.write("not valid json\n");
       });
 
@@ -201,9 +224,8 @@ describe("DecisionSocketServer", () => {
     expect(parsed.error).toBe("Invalid JSON in decision request");
   });
 
-  it("cleans up on stop", async () => {
+  it("closes cleanly on stop", async () => {
     await server.start();
-    await server.stop();
-    expect(existsSync(socketPath)).toBe(false);
+    await expect(server.stop()).resolves.toBeUndefined();
   });
 });

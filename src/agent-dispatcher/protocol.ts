@@ -22,6 +22,10 @@ export interface AgentContext {
   containerId?: string;
   /** Workflow run ID, passed as AUTO_DEV_RUN_ID env var so agents can call auto-dev request-decision. */
   workflowRunId?: string;
+  /** Decision server host, injected into the container so agents can call auto-dev request-decision via TCP. */
+  decisionHost?: string;
+  /** Decision server TCP port, injected into the container so agents can call auto-dev request-decision via TCP. */
+  decisionPort?: number;
 }
 
 export interface AgentInvoker {
