@@ -237,7 +237,9 @@ export const getPRHeadSha = (repo: string, prNumber: number): string => {
 };
 
 /** Create an inline review comment on a PR file line.
- * `position` is the 1-based line offset within the diff hunk (use `gh pr diff <pr>` to count).
+ * Uses the line-number API (line + side), which supports multi-line ranges and suggestion blocks.
+ * For a suggestion, pass `suggestion` instead of `body` — it will be wrapped in ```suggestion\n...\n```.
+ * For multi-line comments (e.g., replacing lines 5-8), set `startLine` to the first line.
  */
 export const createPRReviewComment = (
   repo: string,
@@ -245,24 +247,45 @@ export const createPRReviewComment = (
   comment: {
     commitId: string;
     path: string;
-    position: number;
-    body: string;
+    /** The last (or only) line number in the file to anchor this comment to (1-based). */
+    line: number;
+    /** For multi-line comments: the first line number. Omit for single-line. */
+    startLine?: number;
+    /** Which side of the diff: "LEFT" (old) or "RIGHT" (new/added). Defaults to "RIGHT". */
+    side?: "LEFT" | "RIGHT";
+    /** Comment body text. Mutually exclusive with `suggestion`. */
+    body?: string;
+    /** Suggested replacement code. Wrapped automatically in ```suggestion fences. Mutually exclusive with `body`. */
+    suggestion?: string;
   },
 ): void => {
-  gh([
+  const bodyText =
+    comment.suggestion !== undefined
+      ? "```suggestion\n" + comment.suggestion + "\n```"
+      : (comment.body ?? "");
+
+  const side = comment.side ?? "RIGHT";
+  const args = [
     "api",
     `repos/${repo}/pulls/${prNumber}/comments`,
     "-X",
     "POST",
     "-f",
-    `body=${comment.body}`,
+    `body=${bodyText}`,
     "-f",
     `commit_id=${comment.commitId}`,
     "-f",
     `path=${comment.path}`,
     "-F",
-    `position=${comment.position}`,
-  ]);
+    `line=${comment.line}`,
+    "-f",
+    `side=${side}`,
+  ];
+  if (comment.startLine !== undefined) {
+    args.push("-F", `start_line=${comment.startLine}`);
+    args.push("-f", `start_side=${side}`);
+  }
+  gh(args);
 };
 
 export interface PRReviewComment {

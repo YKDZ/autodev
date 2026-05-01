@@ -17,32 +17,53 @@ const getRepo = (): string => {
   return repo;
 };
 
-/** auto-dev pr-review-comment <pr-number> <path> <position> --body <text>
- * position: 1-based line offset within the diff hunk (run `gh pr diff <pr>` to identify it)
+/**
+ * auto-dev pr-review-comment <pr-number> <path> <line> [--start-line <n>] [--side LEFT|RIGHT]
+ *                             (--body <text> | --suggest <new-code>)
+ *
+ * --body      Freeform comment text.
+ * --suggest   Suggested replacement code; automatically wrapped in ```suggestion fences.
+ *             Users can click "Apply suggestion" in the GitHub UI to accept the change.
+ * --start-line  For multi-line comments/suggestions: first line of the range.
+ * --side      Which diff side to anchor to (RIGHT = new code, LEFT = old code). Default: RIGHT.
  */
 export const runPRReviewComment = async (args: string[]): Promise<void> => {
   const { values, positionals } = parseArgs({
     args,
     options: {
       body: { type: "string" },
+      suggest: { type: "string" },
+      "start-line": { type: "string" },
+      side: { type: "string" },
     },
     allowPositionals: true,
   });
 
-  const [prNumberStr, filePath, positionStr] = positionals;
-  if (!prNumberStr || !filePath || !positionStr || !values.body) {
+  const [prNumberStr, filePath, lineStr] = positionals;
+  if (
+    !prNumberStr ||
+    !filePath ||
+    !lineStr ||
+    (!values.body && !values.suggest)
+  ) {
     logger.error(
-      "Usage: auto-dev pr-review-comment <pr-number> <path> <position> --body <text>\n" +
-        "  position: 1-based offset within the diff hunk (use gh pr diff <pr> to identify)",
+      "Usage: auto-dev pr-review-comment <pr-number> <path> <line> (--body <text> | --suggest <new-code>)\n" +
+        "  [--start-line <n>] [--side LEFT|RIGHT]\n" +
+        "  --suggest wraps <new-code> in GitHub suggestion fences (Apply suggestion button in UI)",
     );
     process.exit(1);
   }
 
   const prNumber = parseInt(prNumberStr, 10);
-  const position = parseInt(positionStr, 10);
+  const line = parseInt(lineStr, 10);
+  const startLine = values["start-line"]
+    ? parseInt(values["start-line"], 10)
+    : undefined;
+  const sideRaw = values.side;
+  const side: "LEFT" | "RIGHT" = sideRaw === "LEFT" ? "LEFT" : "RIGHT";
 
-  if (isNaN(prNumber) || isNaN(position)) {
-    logger.error("pr-number and position must be integers");
+  if (isNaN(prNumber) || isNaN(line)) {
+    logger.error("pr-number and line must be integers");
     process.exit(1);
   }
 
@@ -52,12 +73,17 @@ export const runPRReviewComment = async (args: string[]): Promise<void> => {
   createPRReviewComment(repo, prNumber, {
     commitId,
     path: filePath,
-    position,
-    body: values.body,
+    line,
+    startLine,
+    side,
+    body: values.suggest !== undefined ? undefined : values.body,
+    suggestion: values.suggest,
   });
 
+  const mode = values.suggest !== undefined ? "suggestion" : "comment";
+  const range = startLine !== undefined ? `${startLine}-${line}` : String(line);
   logger.info(
-    `[auto-dev] Posted review comment on PR #${prNumber} at ${filePath} (diff position ${position})`,
+    `[auto-dev] Posted review ${mode} on PR #${prNumber} at ${filePath}:${range}`,
   );
 };
 

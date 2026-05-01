@@ -1043,17 +1043,26 @@ export class Orchestrator {
       await import("../shared/frontmatter-parser.js");
     const frontmatterConfig = parseFrontmatter(commentBody);
 
-    const agentDefinition = frontmatterConfig?.agent ?? "retrigger";
     const model = frontmatterConfig?.model ?? run.agentModel;
     const effort = frontmatterConfig?.effort ?? run.agentEffort;
-    const retriggerDefinitionFile =
-      this.config!.agents[agentDefinition]?.definition;
 
     const instruction = stripFrontmatter(commentBody).trim();
+
+    // Auto-select pr-reviewer agent when the instruction starts with "review"
+    const isReviewRequest = /^\s*@autodev\s+review\b/i.test(commentBody);
+    const resolvedAgent =
+      frontmatterConfig?.agent ??
+      (isReviewRequest ? "pr-reviewer" : "retrigger");
+
+    const agentDefinition = resolvedAgent;
+    const retriggerDefinitionFile =
+      this.config!.agents[agentDefinition]?.definition;
 
     const issueContext = [
       "## Re-Trigger on PR #" + prNumber,
       "",
+      `PR: #${prNumber}`,
+      `REPO: ${this.repoFullName}`,
       "Original Issue: #" + run.issueNumber,
       "Branch: " + run.branch,
       "Run ID: " + run.id,
