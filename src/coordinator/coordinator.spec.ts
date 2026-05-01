@@ -18,8 +18,8 @@ vi.mock("../config/loader.js", () => ({
   }),
 }));
 
-import { ensureStateDirs } from "../state-store/index.js";
 import { Orchestrator } from "../orchestrator/orchestrator.js";
+import { ensureStateDirs } from "../state-store/index.js";
 
 let tmpDir: string;
 let oldSocketPath: string | undefined;

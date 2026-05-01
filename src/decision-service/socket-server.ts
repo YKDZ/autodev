@@ -13,7 +13,6 @@ import { DecisionRequestSchema } from "../shared/schemas.js";
 interface PendingConnection {
   socket: Socket;
   request: DecisionRequest;
-  buffer: string;
 }
 
 export interface SocketServerOptions {
@@ -59,9 +58,7 @@ export class DecisionSocketServer {
       });
 
       this.server.on("error", (err: NodeJS.ErrnoException) => {
-        logger.error(
-          `[auto-dev] Decision socket server error: ${err.message}`,
-        );
+        logger.error(`[auto-dev] Decision socket server error: ${err.message}`);
         reject(err);
       });
 
@@ -162,15 +159,23 @@ export class DecisionSocketServer {
     let decisionId: string | null = null;
 
     socket.on("data", (data: Buffer) => {
+      socket.pause();
       void this.handleData(socket, data, buffer, decisionId)
         .then((updated) => {
           buffer = updated.buffer;
           decisionId = updated.decisionId;
+          socket.resume();
         })
         .catch((err: unknown) => {
           logger.error(`[auto-dev] Connection handler error: ${String(err)}`);
           socket.destroy();
         });
+    });
+
+    socket.on("close", () => {
+      if (decisionId) {
+        this.cleanupConnection(decisionId);
+      }
     });
 
     socket.on("error", (err: Error) => {
@@ -231,13 +236,9 @@ export class DecisionSocketServer {
         );
         socket.write(JSON.stringify({ results }) + "\n");
         socket.end();
-        for (const req of batchRequests) {
-          const accepted = results.find((r) => r.id === req.id);
-          if (accepted?.accepted) {
-            this.pending.set(req.id, { socket, request: req, buffer });
-          }
-        }
-        return { buffer, decisionId: batchRequests[0]?.id ?? null };
+        // Batch mode is fire-and-forget: the agent does not wait for resolution
+        // on this socket, so we must NOT add batch requests to pending.
+        return { buffer, decisionId: null };
       } catch (err) {
         socket.write(JSON.stringify({ error: String(err) }) + "\n");
         socket.end();
@@ -276,19 +277,6 @@ export class DecisionSocketServer {
     this.pending.set(request.id, {
       socket,
       request,
-      buffer,
-    });
-
-    socket.on("close", () => {
-      if (decisionId) {
-        this.cleanupConnection(decisionId);
-      }
-    });
-
-    socket.on("error", () => {
-      if (decisionId) {
-        this.cleanupConnection(decisionId);
-      }
     });
 
     return { buffer, decisionId };

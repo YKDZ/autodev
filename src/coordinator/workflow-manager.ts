@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type {
-  WorkflowRun,
-  WorkflowStatus,
-} from "../shared/types.js";
+import type { WorkflowRun, WorkflowStatus } from "../shared/types.js";
 import type { PollResult } from "../shared/types.js";
 
 import {

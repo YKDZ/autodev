@@ -4,3 +4,4 @@ logs
 .pnpm-store
 *.pem
 todo
+.e2e-workspace

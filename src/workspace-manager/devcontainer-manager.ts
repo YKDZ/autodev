@@ -1,6 +1,8 @@
 /* oxlint-disable typescript-eslint/no-unsafe-type-assertion -- devcontainer CLI JSON and Docker error objects */
 import { execFileSync, execSync } from "node:child_process";
 
+import { logger } from "../shared/logger.js";
+
 export class DevcontainerManager {
   constructor(_workspaceRoot: string) {
     /* workspaceRoot kept for future use */
@@ -8,17 +10,26 @@ export class DevcontainerManager {
 
   /**
    * Start a devcontainer for the given worktree path.
-   * Returns the container ID.
+   * Returns the container ID, or empty string if the container
+   * could not be started (caller should fall back to local execution).
    */
   start(worktreePath: string): string {
-    const output = execFileSync(
-      "devcontainer",
-      ["up", "--workspace-folder", worktreePath],
-      {
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    ).trim();
+    let output: string;
+    try {
+      output = execFileSync(
+        "devcontainer",
+        ["up", "--workspace-folder", worktreePath],
+        {
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      ).trim();
+    } catch (err) {
+      logger.warn(
+        `[auto-dev] Devcontainer up failed for ${worktreePath}, continuing without container: ${String(err)}`,
+      );
+      return "";
+    }
 
     // Parse JSON output to extract container ID
     // devcontainer up outputs JSON lines; look for the containerId field
@@ -73,16 +84,15 @@ export class DevcontainerManager {
     command: string[],
     env: Record<string, string>,
   ): number {
-    const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+    const envArgs = Object.entries(env).flatMap(([k, v]) => [
+      "-e",
+      `${k}=${v}`,
+    ]);
     try {
-      execFileSync(
-        "docker",
-        ["exec", ...envArgs, containerId, ...command],
-        {
-          encoding: "utf-8",
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
+      execFileSync("docker", ["exec", ...envArgs, containerId, ...command], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       return 0;
     } catch (err) {
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion

@@ -39,6 +39,7 @@ export GH_TOKEN="${GITHUB_TOKEN}"
 # Clone / update the repo
 if ! git -C "${GIT_WORKSPACE_ROOT}" rev-parse --git-dir > /dev/null 2>&1; then
   echo "[auto-dev] Initialising git repo at ${GIT_WORKSPACE_ROOT}..."
+  mkdir -p "${GIT_WORKSPACE_ROOT}"
   git -C "${GIT_WORKSPACE_ROOT}" init
   git -C "${GIT_WORKSPACE_ROOT}" remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO_FULL_NAME}.git"
   git -C "${GIT_WORKSPACE_ROOT}" fetch origin main --depth=1

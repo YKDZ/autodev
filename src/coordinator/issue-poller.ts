@@ -3,9 +3,9 @@ import type { PollResult } from "../shared/types.js";
 
 export type { PollResult };
 
-import { logger } from "../shared/logger.js";
 import { parseFrontmatter } from "../shared/frontmatter-parser.js";
 import { listIssues } from "../shared/gh-cli.js";
+import { logger } from "../shared/logger.js";
 import { listWorkflowRuns } from "../state-store/index.js";
 
 export const pollIssues = async (
@@ -39,9 +39,10 @@ export const pollIssues = async (
     const bodyFm = parseFrontmatter(issue.body);
 
     // Resolve agent definition: frontmatter > config default
-    const agentDefinition = (bodyFm?.agent && config.agents[bodyFm.agent])
-      ? bodyFm.agent
-      : config.defaultAgent;
+    const agentDefinition =
+      bodyFm?.agent && config.agents[bodyFm.agent]
+        ? bodyFm.agent
+        : config.defaultAgent;
 
     results.push({
       issueNumber: issue.number,

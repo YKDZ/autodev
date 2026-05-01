@@ -82,7 +82,9 @@ const makeDecision = (
 describe("ensureStateDirs", () => {
   it("creates state directory and SQLite database", async () => {
     expect(existsSync(resolve(tmpDir, "tools/auto-dev/state"))).toBe(true);
-    expect(existsSync(resolve(tmpDir, "tools/auto-dev/state/autodev.db"))).toBe(true);
+    expect(existsSync(resolve(tmpDir, "tools/auto-dev/state/autodev.db"))).toBe(
+      true,
+    );
   });
 });
 
@@ -229,9 +231,11 @@ describe("SQLite schema", () => {
   it("creates all three tables", () => {
     const dbPath = resolve(tmpDir, "tools/auto-dev/state/autodev.db");
     const db = new DatabaseSync(dbPath);
-    const tables = db.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-    ).all() as Record<string, unknown>[];
+    const tables = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+      )
+      .all() as Record<string, unknown>[];
     // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
     const tableNames = tables.map((t) => t.name as string);
     expect(tableNames).toContain("workflow_runs");

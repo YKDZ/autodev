@@ -12,12 +12,20 @@ export const parseAllowedUsers = (): Set<string> => {
   );
 };
 
+// Cache the parsed set so we don't re-parse on every call in high-frequency polls.
+let _allowedUsersCache: Set<string> | null = null;
+let _allowedUsersEnvSnapshot = "";
+
 /**
  * Check if a GitHub login is in the allowed users list.
  * Comparison is case-insensitive.
  */
 export const isAllowedUser = (login: string): boolean => {
-  const allowed = parseAllowedUsers();
-  if (allowed.size === 0) return true; // No restriction when empty
-  return allowed.has(login.toLowerCase());
+  const current = process.env["AUTO_DEV_ALLOWED_USERS"] ?? "";
+  if (_allowedUsersCache === null || current !== _allowedUsersEnvSnapshot) {
+    _allowedUsersEnvSnapshot = current;
+    _allowedUsersCache = parseAllowedUsers();
+  }
+  if (_allowedUsersCache.size === 0) return true; // No restriction when empty
+  return _allowedUsersCache.has(login.toLowerCase());
 };

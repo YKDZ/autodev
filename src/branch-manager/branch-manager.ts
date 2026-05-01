@@ -2,8 +2,8 @@ import { execFileSync, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { logger } from "../shared/logger.js";
 import { getAuthEnv } from "../shared/github-app-auth.js";
+import { logger } from "../shared/logger.js";
 
 const git = (args: string[], cwd: string): string => {
   try {
@@ -181,7 +181,10 @@ export class BranchManager {
       },
     ).trim();
     const match = output.match(/\/pull\/(\d+)/);
-    return { number: match ? parseInt(match[1], 10) : 0, url: output };
+    if (!match) {
+      throw new Error(`Failed to parse PR number from gh output: ${output}`);
+    }
+    return { number: parseInt(match[1], 10), url: output };
   }
 
   mergePR(
@@ -245,8 +248,14 @@ export class BranchManager {
 
   updateRemoteAuth(token: string): void {
     const repo = process.env.GITHUB_REPOSITORY ?? this.repoFullName;
-    execSync(
-      `git remote set-url origin https://x-access-token:${token}@github.com/${repo}.git`,
+    execFileSync(
+      "git",
+      [
+        "remote",
+        "set-url",
+        "origin",
+        `https://x-access-token:${token}@github.com/${repo}.git`,
+      ],
       { cwd: this.workspaceRoot },
     );
   }

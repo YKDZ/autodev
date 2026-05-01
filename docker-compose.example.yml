@@ -1,23 +1,60 @@
+# AutoDev docker-compose example
+#
+# Fill in the values below and run:
+#   docker compose -f docker-compose.example.yml up -d
+#
+# Required environment variables:
+#   GITHUB_APP_ID            - GitHub App ID
+#   GITHUB_APP_PRIVATE_KEY   - GitHub App private key (PEM, use | for multiline)
+#   GITHUB_APP_INSTALLATION_ID - GitHub App installation ID
+#   GITHUB_REPOSITORY        - Target repo (owner/repo)
+#
+# Optional environment variables:
+#   ANTHROPIC_BASE_URL       - Custom Anthropic API base URL
+#   ANTHROPIC_API_KEY        - Anthropic API key
+#   SSH_PASSWORD             - Root password for SSH access
+#   SSH_PUBLIC_KEY           - Public key for SSH key auth
+#   AUTO_DEV_POLL_INTERVAL_SEC - Issue poll interval in seconds (default: 30)
+#   AUTO_DEV_DEFAULT_AGENT   - Default agent definition (default: full-pipeline)
+
 services:
-  auto-dev:
-    build:
-      context: ../..
-      dockerfile: tools/auto-dev/Dockerfile
-    volumes:
-      - ../..:/workspace
-      - auto-dev-state:/workspace/tools/auto-dev/state
-      - auto-dev-logs:/workspace/tools/auto-dev/logs
-    environment:
-      - GITHUB_REPOSITORY=${GITHUB_REPOSITORY}
-      - GITHUB_APP_ID=${GITHUB_APP_ID}
-      - GITHUB_APP_PRIVATE_KEY=${GITHUB_APP_PRIVATE_KEY}
-      - GITHUB_APP_INSTALLATION_ID=${GITHUB_APP_INSTALLATION_ID}
-      - SSH_PUBLIC_KEY=${SSH_PUBLIC_KEY:-}
-      - SSH_PASSWORD=${SSH_PASSWORD:-}
-    ports:
-      - "2222:22"
+  autodev:
+    build: .
+    image: autodev:latest
+    container_name: autodev
     restart: unless-stopped
 
+    ports:
+      - "${SSH_PORT:-2222}:22"
+
+    environment:
+      # GitHub App credentials (required)
+      GITHUB_APP_ID: "${GITHUB_APP_ID}"
+      GITHUB_APP_PRIVATE_KEY: "${GITHUB_APP_PRIVATE_KEY}"
+      GITHUB_APP_INSTALLATION_ID: "${GITHUB_APP_INSTALLATION_ID}"
+      GITHUB_REPOSITORY: "${GITHUB_REPOSITORY:-owner/repo}"
+
+      # Anthropic API configuration (optional - pass through to dev containers)
+      ANTHROPIC_BASE_URL: "${ANTHROPIC_BASE_URL:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+
+      # SSH configuration (optional)
+      SSH_PASSWORD: "${SSH_PASSWORD:-}"
+      SSH_PUBLIC_KEY: "${SSH_PUBLIC_KEY:-}"
+
+      # AutoDev configuration (optional)
+      AUTO_DEV_POLL_INTERVAL_SEC: "${AUTO_DEV_POLL_INTERVAL_SEC:-30}"
+      AUTO_DEV_DEFAULT_AGENT: "${AUTO_DEV_DEFAULT_AGENT:-full-pipeline}"
+      AUTO_DEV_MAX_DECISION_PER_RUN: "${AUTO_DEV_MAX_DECISION_PER_RUN:-20}"
+      AUTO_DEV_MAX_IMPL_CYCLES: "${AUTO_DEV_MAX_IMPL_CYCLES:-5}"
+
+    volumes:
+      # Mount Docker socket for devcontainer management
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Map worktree path to host so devcontainer can bind-mount it
+      - ./autodev-data:/opt/repo/tools/auto-dev/worktrees
+      # Persist SSH host keys across restarts
+      - autodev-ssh:/etc/ssh
+
 volumes:
-  auto-dev-state:
-  auto-dev-logs:
+  autodev-ssh:

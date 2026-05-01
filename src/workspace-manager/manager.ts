@@ -1,12 +1,12 @@
 import type { WorkspaceRegistryEntry } from "../shared/types.js";
 
 import { logger } from "../shared/logger.js";
-import { GitManager } from "./git-manager.js";
-import { DevcontainerManager } from "./devcontainer-manager.js";
 import {
   registerWorkspace,
   findWorkspaceByIssueNumber,
 } from "../state-store/index.js";
+import { DevcontainerManager } from "./devcontainer-manager.js";
+import { GitManager } from "./git-manager.js";
 
 export interface WorkspaceInfo {
   branch: string;
@@ -32,10 +32,7 @@ export class WorkspaceManager {
   /**
    * Full lifecycle: create branch, worktree, start devcontainer.
    */
-  async create(
-    issueNumber: number,
-    runId: string,
-  ): Promise<WorkspaceInfo> {
+  async create(issueNumber: number, runId: string): Promise<WorkspaceInfo> {
     const { branch, worktreePath } = this.git.createBranch(issueNumber);
 
     logger.info(
@@ -70,7 +67,10 @@ export class WorkspaceManager {
     this.git.ensureWorktree(branch, worktreePath);
 
     let containerId = "";
-    const existing = findWorkspaceByIssueNumber(this.workspaceRoot, issueNumber);
+    const existing = findWorkspaceByIssueNumber(
+      this.workspaceRoot,
+      issueNumber,
+    );
     if (existing && this.devcontainer.isRunning(existing.containerId)) {
       containerId = existing.containerId;
     } else {

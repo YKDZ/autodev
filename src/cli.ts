@@ -1,8 +1,5 @@
 #!/usr/bin/env node
 
-// hello auto-dev
-
-import { logger } from "./shared/logger.js";
 import { runAudit } from "./cli/audit.js";
 import { runConfig } from "./cli/config.js";
 import { runDecisions } from "./cli/decisions.js";
@@ -17,6 +14,7 @@ import { runResolveDecision } from "./cli/resolve-decision.js";
 import { runStart } from "./cli/start.js";
 import { runStatus } from "./cli/status.js";
 import { runStop } from "./cli/stop.js";
+import { logger } from "./shared/logger.js";
 
 const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   start: runStart,

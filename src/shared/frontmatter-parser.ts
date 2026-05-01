@@ -27,38 +27,64 @@ const validatePermissionMode = (val: string): string | null =>
 
 export const parseFrontmatter = (content: string): FrontmatterConfig | null => {
   const match = content.match(FRONTMATTER_RE);
-  if (!match) return null;
+  if (match) {
+    let parsed: unknown;
+    try {
+      parsed = parseYaml(match[1]);
+    } catch {
+      logger.warn("[auto-dev] Failed to parse YAML frontmatter, ignoring.");
+      return null;
+    }
 
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(match[1]);
-  } catch {
-    logger.warn("[auto-dev] Failed to parse YAML frontmatter, ignoring.");
-    return null;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      return null;
+    const obj: Record<string, unknown> = z
+      .record(z.string(), z.unknown())
+      .parse(parsed);
+
+    return {
+      model: typeof obj.model === "string" ? obj.model : null,
+      effort:
+        typeof obj.effort === "string" ? validateEffort(obj.effort) : null,
+      agent: typeof obj.agent === "string" ? obj.agent : null,
+      maxDecisions:
+        typeof obj["max-decisions"] === "number" && obj["max-decisions"] > 0
+          ? obj["max-decisions"]
+          : null,
+      maxTurns:
+        typeof obj["max-turns"] === "number" && obj["max-turns"] > 0
+          ? obj["max-turns"]
+          : null,
+      permissionMode:
+        typeof obj["permission-mode"] === "string"
+          ? validatePermissionMode(obj["permission-mode"])
+          : null,
+    };
   }
 
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
-    return null;
-  const obj: Record<string, unknown> = z
-    .record(z.string(), z.unknown())
-    .parse(parsed);
+  // Fallback: parse ## Header <value> syntax from issue body
+  const headerMatch = (label: string): string | null => {
+    const re = new RegExp(`^##\\s+${label}\\s+(.+)$`, "im");
+    const m = content.match(re);
+    return m ? m[1].trim() : null;
+  };
+
+  const agent = headerMatch("Agent") ?? headerMatch("agent");
+  const model = headerMatch("Model") ?? headerMatch("model");
+  const effort = headerMatch("Effort") ?? headerMatch("effort");
+  const maxTurnsStr =
+    headerMatch("Max[- ]?Turns") ?? headerMatch("max[- ]?turns");
+  const maxTurns = maxTurnsStr ? parseInt(maxTurnsStr, 10) : null;
+
+  if (!agent && !model && !effort && !maxTurns) return null;
 
   return {
-    model: typeof obj.model === "string" ? obj.model : null,
-    effort: typeof obj.effort === "string" ? validateEffort(obj.effort) : null,
-    agent: typeof obj.agent === "string" ? obj.agent : null,
-    maxDecisions:
-      typeof obj["max-decisions"] === "number" && obj["max-decisions"] > 0
-        ? obj["max-decisions"]
-        : null,
-    maxTurns:
-      typeof obj["max-turns"] === "number" && obj["max-turns"] > 0
-        ? obj["max-turns"]
-        : null,
-    permissionMode:
-      typeof obj["permission-mode"] === "string"
-        ? validatePermissionMode(obj["permission-mode"])
-        : null,
+    model,
+    effort: typeof effort === "string" ? validateEffort(effort) : null,
+    agent,
+    maxDecisions: null,
+    maxTurns: typeof maxTurns === "number" && maxTurns > 0 ? maxTurns : null,
+    permissionMode: null,
   };
 };
 

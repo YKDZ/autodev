@@ -1,12 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import type { AutoDevConfig } from "../config/types.js";
 import type { WorkflowRun } from "../shared/types.js";
 import type { PollResult } from "./issue-poller.js";
 
-import { logger } from "../shared/logger.js";
 import { AgentDispatcher } from "../agent-dispatcher/index.js";
 import { AuditLogger } from "../audit-logger/index.js";
 import { BranchManager } from "../branch-manager/index.js";
@@ -28,6 +26,8 @@ import {
   removeIssueLabels,
   updateIssueLabels,
 } from "../shared/gh-cli.js";
+import { logger } from "../shared/logger.js";
+import { isAllowedUser } from "../shared/user-filter.js";
 import {
   ensureStateDirs,
   listDecisions,
@@ -242,11 +242,6 @@ export class Coordinator {
     // 3. PR-First: initial commit, push, create PR
     let prNumber: number | null = null;
     try {
-      const initFile = resolve(worktreePath, `.auto-dev-init-${run.id}.md`);
-      writeFileSync(
-        initFile,
-        `# Auto-Dev Run ${run.id}\n\nIssue: #${result.issueNumber}\nBranch: ${run.branch}\n`,
-      );
       this.branchManager!.commitAndPush(
         run.branch,
         `chore: auto-dev init for issue #${result.issueNumber}`,
@@ -579,6 +574,8 @@ export class Coordinator {
       if (this.processedCommentIds.has(comment.id)) continue;
       this.processedCommentIds.add(comment.id);
       if (comment.body.includes("<!-- auto-dev-bot -->")) continue;
+      const author = comment.user?.login ?? comment.author?.login ?? "";
+      if (author && !isAllowedUser(author)) continue;
       const matches = [...comment.body.matchAll(/@(d\d+)\s+(\S+)/gi)];
       for (const [, rawAlias, choice] of matches) {
         const alias = rawAlias.toLowerCase();
@@ -683,6 +680,7 @@ export class Coordinator {
             if (comment.body.includes("<!-- auto-dev-bot -->")) continue;
             const author = comment.user?.login ?? comment.author?.login ?? "";
             if (author === "auto-dev[bot]") continue;
+            if (author && !isAllowedUser(author)) continue;
 
             const match = comment.body.match(/@autodev\b/i);
             if (!match) continue;

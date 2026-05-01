@@ -37,7 +37,10 @@ export class PRManager {
       },
     ).trim();
     const match = output.match(/\/pull\/(\d+)/);
-    return { number: match ? parseInt(match[1], 10) : 0, url: output };
+    if (!match) {
+      throw new Error(`Failed to parse PR number from gh output: ${output}`);
+    }
+    return { number: parseInt(match[1], 10), url: output };
   }
 
   close(prNumber: number, deleteBranch = false): void {
