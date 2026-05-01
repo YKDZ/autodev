@@ -20,9 +20,8 @@
  */
 
 import { execFileSync, execSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -39,7 +38,7 @@ import {
 } from "../shared/github-app-auth.js";
 
 // ── Constants ──────────────────────────────────────────────────────────────
-const REPO = "YKDZ/cat";
+const REPO = "YKDZ/autodev";
 /** The GitHub App bot login that should author all coordinator/agent comments. */
 const BOT_LOGIN = "ykdz-s-autodevbot[bot]";
 const BOT_MARKER = "<!-- auto-dev-bot -->";
@@ -188,7 +187,10 @@ describe.skipIf(!E2E_ENABLED)("Auto-Dev full lifecycle E2E", () => {
 
     // Clone a fresh copy of the repo into a temp dir as the coordinator workspace.
     // This avoids interfering with the working tree of the main dev repo.
-    workspaceRoot = await mkdtemp(resolve(tmpdir(), "auto-dev-e2e-"));
+    // Use a path under /workspaces/autodev/ so the Docker host can bind-mount
+    // worktree directories for devcontainer support.
+    mkdirSync("/workspaces/autodev/.e2e-workspace", { recursive: true });
+    workspaceRoot = await mkdtemp("/workspaces/autodev/.e2e-workspace/e2e-");
     execSync(
       `git clone https://github.com/${REPO}.git "${workspaceRoot}" --depth=1`,
       {
@@ -213,19 +215,12 @@ describe.skipIf(!E2E_ENABLED)("Auto-Dev full lifecycle E2E", () => {
       { cwd: workspaceRoot, stdio: "pipe" },
     );
 
-    // Write a fast-poll config so the coordinator doesn't wait 30 s per cycle
-    writeFileSync(
-      resolve(workspaceRoot, "auto-dev.config.mjs"),
-      [
-        "export default {",
-        "  pollIntervalSec: 10,",
-        "  maxDecisionPerRun: 20,",
-        "  maxImplCycles: 5,",
-        '  defaultAgent: "impl-only",',
-        "  agents: {},",
-        "};",
-      ].join("\n") + "\n",
-    );
+    // Override config via environment variables (replaces auto-dev.config.mjs)
+    process.env["AUTO_DEV_POLL_INTERVAL_SEC"] = "10";
+    process.env["AUTO_DEV_MAX_DECISION_PER_RUN"] = "20";
+    process.env["AUTO_DEV_MAX_IMPL_CYCLES"] = "5";
+    // Use the real auto-dev-impl-only agent definition from the repo
+    process.env["AUTO_DEV_DEFAULT_AGENT"] = "impl-only";
 
     // Ensure required labels exist
     ensureLabels([
@@ -237,6 +232,10 @@ describe.skipIf(!E2E_ENABLED)("Auto-Dev full lifecycle E2E", () => {
       "effort:max",
     ]);
 
+    // Use real devcontainer config from the repo (no override needed).
+    // The devcontainer bind mount fails gracefully in this environment;
+    // the orchestrator falls back to local agent execution.
+
     // Create the test issue — agent configuration comes from frontmatter in the
     // body, not from labels.  Only `auto-dev:ready` is needed as the trigger.
     issueNumber = createIssue(
@@ -245,7 +244,7 @@ describe.skipIf(!E2E_ENABLED)("Auto-Dev full lifecycle E2E", () => {
         "---",
         "agent: impl-only",
         "effort: max",
-        "model: haiku",
+        "model: deepseek-v4-flash",
         "---",
         "",
         "This issue is created automatically by the auto-dev E2E test suite.",

@@ -1,13 +1,22 @@
 /* oxlint-disable typescript-eslint/no-unsafe-type-assertion -- SQLite returns Record<string, unknown> */
 
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
-
-import type { WorkflowRun, DecisionBlock, WorkspaceRegistryEntry } from "../shared/types.js";
 import {
-  WorkflowRunSchema,
-  DecisionBlockSchema,
-} from "../shared/schemas.js";
+  existsSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import z from "zod";
+
+import type {
+  WorkflowRun,
+  DecisionBlock,
+  WorkspaceRegistryEntry,
+} from "../shared/types.js";
+
+import { WorkflowRunSchema, DecisionBlockSchema } from "../shared/schemas.js";
 
 const MIGRATION_MARKER_FILE = ".migrated-to-sqlite";
 
@@ -83,7 +92,11 @@ const initSchema = (db: DatabaseSync): void => {
 
 export const closeDb = (): void => {
   for (const db of _dbs.values()) {
-    try { db.close(); } catch { /* best-effort */ }
+    try {
+      db.close();
+    } catch {
+      /* best-effort */
+    }
   }
   _dbs.clear();
 };
@@ -108,7 +121,9 @@ export const migrateFromJson = (workspaceRoot: string): void => {
   // Migrate workflow runs
   const runsDir = getRunsDir(workspaceRoot);
   if (existsSync(runsDir)) {
-    const files = readdirSync(runsDir).filter((f: string) => f.endsWith(".json"));
+    const files = readdirSync(runsDir).filter((f: string) =>
+      f.endsWith(".json"),
+    );
     const stmt = db.prepare(`
       INSERT OR IGNORE INTO workflow_runs
         (id, issue_number, repo_full_name, status, branch, agent_definition,
@@ -145,7 +160,9 @@ export const migrateFromJson = (workspaceRoot: string): void => {
   // Migrate decision blocks
   const decisionsDir = getDecisionsDir(workspaceRoot);
   if (existsSync(decisionsDir)) {
-    const files = readdirSync(decisionsDir).filter((f: string) => f.endsWith(".json"));
+    const files = readdirSync(decisionsDir).filter((f: string) =>
+      f.endsWith(".json"),
+    );
     const stmt = db.prepare(`
       INSERT OR IGNORE INTO decision_blocks
         (id, workflow_run_id, alias, title, options, recommendation, context,
@@ -157,7 +174,9 @@ export const migrateFromJson = (workspaceRoot: string): void => {
     for (const file of files) {
       try {
         const raw = readFileSync(`${decisionsDir}/${file}`, "utf-8");
-        const decision = DecisionBlockSchema.parse(JSON.parse(raw)) as DecisionBlock;
+        const decision = DecisionBlockSchema.parse(
+          JSON.parse(raw),
+        ) as DecisionBlock;
         stmt.run(
           decision.id,
           decision.workflowRunId,
@@ -199,7 +218,9 @@ const rowToRun = (row: Record<string, unknown>): WorkflowRun => ({
   startedAt: row.started_at as string,
   updatedAt: row.updated_at as string,
   decisionCount: row.decision_count as number,
-  pendingDecisionIds: JSON.parse(row.pending_decision_ids as string) as string[],
+  pendingDecisionIds: JSON.parse(
+    row.pending_decision_ids as string,
+  ) as string[],
   prNumber: (row.pr_number as number) ?? null,
 });
 
@@ -245,7 +266,9 @@ export const loadWorkflowRun = (
 
 export const listWorkflowRuns = (workspaceRoot: string): WorkflowRun[] => {
   const db = getDb(workspaceRoot);
-  const stmt = db.prepare("SELECT * FROM workflow_runs ORDER BY started_at DESC");
+  const stmt = db.prepare(
+    "SELECT * FROM workflow_runs ORDER BY started_at DESC",
+  );
   const rows = stmt.all() as Record<string, unknown>[];
   return rows.map(rowToRun);
 };
@@ -263,7 +286,8 @@ const rowToDecision = (row: Record<string, unknown>): DecisionBlock => ({
   status: row.status as DecisionBlock["status"],
   resolution: (row.choice as string) ?? null,
   resolvedBy: (row.resolved_by as string) ?? null,
-  resolutionChannel: (row.resolution_channel as DecisionBlock["resolutionChannel"]) ?? null,
+  resolutionChannel:
+    (row.resolution_channel as DecisionBlock["resolutionChannel"]) ?? null,
   requestedAt: row.created_at as string,
   resolvedAt: (row.resolved_at as string) ?? null,
   batchId: (row.batch_id as string) ?? null,
@@ -314,7 +338,9 @@ export const loadDecision = (
 
 export const listDecisions = (workspaceRoot: string): DecisionBlock[] => {
   const db = getDb(workspaceRoot);
-  const stmt = db.prepare("SELECT * FROM decision_blocks ORDER BY created_at ASC");
+  const stmt = db.prepare(
+    "SELECT * FROM decision_blocks ORDER BY created_at ASC",
+  );
   const rows = stmt.all() as Record<string, unknown>[];
   return rows.map(rowToDecision);
 };
@@ -346,7 +372,9 @@ export const unregisterWorkspace = async (
   issueNumber: number,
 ): Promise<void> => {
   const db = getDb(workspaceRoot);
-  const stmt = db.prepare("DELETE FROM workspace_registry WHERE issue_number = ?");
+  const stmt = db.prepare(
+    "DELETE FROM workspace_registry WHERE issue_number = ?",
+  );
   stmt.run(issueNumber);
 };
 
@@ -355,7 +383,9 @@ export const findWorkspaceByIssueNumber = (
   issueNumber: number,
 ): WorkspaceRegistryEntry | null => {
   const db = getDb(workspaceRoot);
-  const stmt = db.prepare("SELECT * FROM workspace_registry WHERE issue_number = ?");
+  const stmt = db.prepare(
+    "SELECT * FROM workspace_registry WHERE issue_number = ?",
+  );
   const row = stmt.get(issueNumber) as Record<string, unknown> | undefined;
   if (!row) return null;
   return {
@@ -368,9 +398,13 @@ export const findWorkspaceByIssueNumber = (
   };
 };
 
-export const listAllWorkspaces = (workspaceRoot: string): WorkspaceRegistryEntry[] => {
+export const listAllWorkspaces = (
+  workspaceRoot: string,
+): WorkspaceRegistryEntry[] => {
   const db = getDb(workspaceRoot);
-  const stmt = db.prepare("SELECT * FROM workspace_registry ORDER BY created_at DESC");
+  const stmt = db.prepare(
+    "SELECT * FROM workspace_registry ORDER BY created_at DESC",
+  );
   const rows = stmt.all() as Record<string, unknown>[];
   return rows.map((row) => ({
     issueNumber: row.issue_number as number,
@@ -401,12 +435,22 @@ export const saveCoordinatorState = async (
 
 export const loadCoordinatorState = (
   workspaceRoot: string,
-): { startedAt: string; pollIntervalSec: number; activeRunIds: string[] } | null => {
+): {
+  startedAt: string;
+  pollIntervalSec: number;
+  activeRunIds: string[];
+} | null => {
   const path = `${workspaceRoot}/tools/auto-dev/state/coordinator.json`;
   if (!existsSync(path)) return null;
   try {
-    // oxlint-disable-next-line typescript-eslint/no-unsafe-return
-    return JSON.parse(readFileSync(path, "utf-8"));
+    const CoordinatorStateSchema = z.object({
+      startedAt: z.string(),
+      pollIntervalSec: z.number(),
+      activeRunIds: z.array(z.string()),
+    });
+    return CoordinatorStateSchema.parse(
+      JSON.parse(readFileSync(path, "utf-8")),
+    );
   } catch {
     return null;
   }

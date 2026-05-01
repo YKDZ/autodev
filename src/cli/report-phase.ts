@@ -1,6 +1,6 @@
-import { logger } from "../shared/logger.js";
 import { WorkflowManager } from "../orchestrator/index.js";
 import { createComment } from "../shared/gh-cli.js";
+import { logger } from "../shared/logger.js";
 import { loadWorkflowRun } from "../state-store/index.js";
 
 export const runReportPhase = async (args: string[]): Promise<void> => {

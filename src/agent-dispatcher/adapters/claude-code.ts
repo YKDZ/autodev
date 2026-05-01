@@ -6,6 +6,17 @@ import type { AgentInvoker, AgentContext, AgentEvent } from "../protocol.js";
 
 import { getAuthEnv } from "../../shared/github-app-auth.js";
 
+const forwardHostEnv = (): Record<string, string> => {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!value) continue;
+    if (key.startsWith("ANTHROPIC_")) {
+      result[key] = value;
+    }
+  }
+  return result;
+};
+
 export class ClaudeCodeAdapter implements AgentInvoker {
   async *invoke(context: AgentContext): AsyncIterable<AgentEvent> {
     const agentsDir = process.env["AUTO_DEV_AGENTS_DIR"]
@@ -51,6 +62,7 @@ export class ClaudeCodeAdapter implements AgentInvoker {
           return {};
         }
       })(),
+      ...forwardHostEnv(),
       CLAUDE_CODE_TOOL_TIMEOUT_MS: "86400000",
       MOON_WORKSPACE_ROOT: context.workspaceRoot,
     };
@@ -59,10 +71,14 @@ export class ClaudeCodeAdapter implements AgentInvoker {
 
     if (context.containerId) {
       // Run inside a dev container via docker exec
-      const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+      const envArgs = Object.entries(env).flatMap(([k, v]) => [
+        "-e",
+        `${k}=${v}`,
+      ]);
       const dockerArgs = [
         "exec",
-        "-w", cwd,
+        "-w",
+        cwd,
         ...envArgs,
         context.containerId,
         "claude",

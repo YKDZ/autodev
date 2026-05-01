@@ -1,11 +1,11 @@
 import type { AutoDevConfig } from "../config/types.js";
 import type { PollResult } from "../shared/types.js";
 
-import { logger } from "../shared/logger.js";
 import { parseFrontmatter } from "../shared/frontmatter-parser.js";
 import { listIssues } from "../shared/gh-cli.js";
-import { listWorkflowRuns } from "../state-store/index.js";
+import { logger } from "../shared/logger.js";
 import { isAllowedUser } from "../shared/user-filter.js";
+import { listWorkflowRuns } from "../state-store/index.js";
 
 export class IssueWatcher {
   /**
@@ -50,10 +50,10 @@ export class IssueWatcher {
       const bodyFm = parseFrontmatter(issue.body);
 
       // Resolve agent definition: frontmatter > config default
-      const agentDefinition = (bodyFm?.agent &&
-        config.agents[bodyFm.agent])
-        ? bodyFm.agent
-        : config.defaultAgent;
+      const agentDefinition =
+        bodyFm?.agent && config.agents[bodyFm.agent]
+          ? bodyFm.agent
+          : config.defaultAgent;
 
       results.push({
         issueNumber: issue.number,

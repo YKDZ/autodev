@@ -60,9 +60,11 @@ export const getInstallationToken = (): string => {
       { encoding: "utf-8" },
     ).trim();
 
-    let parsed: { token?: string };
+    let parsed: { token: string; expires_at?: string };
     try {
-      parsed = z.object({ token: z.string() }).parse(JSON.parse(response));
+      parsed = z
+        .object({ token: z.string(), expires_at: z.string().optional() })
+        .parse(JSON.parse(response));
     } catch {
       throw new Error(
         `Non-JSON response from GitHub API: ${response.substring(0, 200)}`,
@@ -77,7 +79,9 @@ export const getInstallationToken = (): string => {
 
     cachedToken = {
       token: parsed.token,
-      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      expiresAt: parsed.expires_at
+        ? new Date(parsed.expires_at)
+        : new Date(Date.now() + 60 * 60 * 1000),
     };
     return cachedToken.token;
   } catch (err) {

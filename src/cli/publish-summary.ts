@@ -1,5 +1,5 @@
-import { logger } from "../shared/logger.js";
 import { createComment } from "../shared/gh-cli.js";
+import { logger } from "../shared/logger.js";
 
 export const runPublishSummary = async (args: string[]): Promise<void> => {
   const issueNumber = parseInt(args[0] ?? "", 10);

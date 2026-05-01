@@ -42,14 +42,14 @@ pnpm vitest run src/e2e/lifecycle.test.ts --reporter=verbose --test-timeout=6000
 
 所有配置通过环境变量传入（替代旧的 `auto-dev.config.mjs`）：
 
-| 环境变量 | 默认值 | 说明 |
-| --------- | ------- | ---- |
-| `AUTO_DEV_POLL_INTERVAL_SEC` | 30 | 轮询间隔（秒） |
-| `AUTO_DEV_MAX_DECISION_PER_RUN` | 20 | 每次运行最大决策数 |
-| `AUTO_DEV_MAX_IMPL_CYCLES` | 5 | 最大实现循环数 |
-| `AUTO_DEV_DEFAULT_AGENT` | `"full-pipeline"` | 默认 agent 名称 |
-| `AUTO_DEV_AGENTS` | 内置 5 个 agent | JSON 字符串，覆盖 agent 注册表 |
-| `AUTO_DEV_AGENTS_DIR` | `.claude/agents` | agent 定义文件目录 |
+| 环境变量                        | 默认值            | 说明                           |
+| ------------------------------- | ----------------- | ------------------------------ |
+| `AUTO_DEV_POLL_INTERVAL_SEC`    | 30                | 轮询间隔（秒）                 |
+| `AUTO_DEV_MAX_DECISION_PER_RUN` | 20                | 每次运行最大决策数             |
+| `AUTO_DEV_MAX_IMPL_CYCLES`      | 5                 | 最大实现循环数                 |
+| `AUTO_DEV_DEFAULT_AGENT`        | `"full-pipeline"` | 默认 agent 名称                |
+| `AUTO_DEV_AGENTS`               | 内置 5 个 agent   | JSON 字符串，覆盖 agent 注册表 |
+| `AUTO_DEV_AGENTS_DIR`           | `.claude/agents`  | agent 定义文件目录             |
 
 ## 已知故障模式
 

@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.pnpm-store
+.e2e-workspace
+todo
+logs
+*.pem
+.claude

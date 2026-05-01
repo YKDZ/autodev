@@ -1,30 +1,16 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 import type { AutoDevConfig } from "../config/types.js";
 import type { WorkflowRun } from "../shared/types.js";
-
-import { logger } from "../shared/logger.js";
-import { IssueWatcher } from "./issues-watcher.js";
-import { WorkflowManager } from "./workflow-manager.js";
-import { WorkspaceManager } from "../workspace-manager/index.js";
 import type { WorkspaceInfo } from "../workspace-manager/index.js";
+
 import { AgentDispatcher } from "../agent-dispatcher/index.js";
-import { PRManager } from "../pr-manager/index.js";
 import { AuditLogger } from "../audit-logger/index.js";
+import { loadConfig } from "../config/loader.js";
 import { DecisionManager } from "../decision-service/decision-manager.js";
 import { DecisionSocketServer } from "../decision-service/socket-server.js";
-import { loadConfig } from "../config/loader.js";
-import {
-  ensureStateDirs,
-  saveWorkflowRun,
-  saveCoordinatorState,
-  loadWorkflowRun,
-  listDecisions,
-  unregisterWorkspace,
-  listAllWorkspaces,
-} from "../state-store/index.js";
+import { PRManager } from "../pr-manager/index.js";
 import {
   renderClaimComment,
   renderWorkspaceComment,
@@ -42,7 +28,20 @@ import {
   removeIssueLabels,
   updateIssueLabels,
 } from "../shared/gh-cli.js";
+import { logger } from "../shared/logger.js";
 import { isAllowedUser } from "../shared/user-filter.js";
+import {
+  ensureStateDirs,
+  saveWorkflowRun,
+  saveCoordinatorState,
+  loadWorkflowRun,
+  listDecisions,
+  unregisterWorkspace,
+  listAllWorkspaces,
+} from "../state-store/index.js";
+import { WorkspaceManager } from "../workspace-manager/index.js";
+import { IssueWatcher } from "./issues-watcher.js";
+import { WorkflowManager } from "./workflow-manager.js";
 
 const DEFAULT_SOCKET_PATH = "/var/run/auto-dev.sock";
 
@@ -96,7 +95,10 @@ export class Orchestrator {
       onDecisionRequest: async (request) => {
         const result = await this.decisionManager!.receiveRequest(request);
         if (result.accepted) {
-          const run = loadWorkflowRun(this.workspaceRoot, request.workflowRunId);
+          const run = loadWorkflowRun(
+            this.workspaceRoot,
+            request.workflowRunId,
+          );
           if (run) {
             const pending = listDecisions(this.workspaceRoot).filter(
               (d) =>
@@ -124,7 +126,10 @@ export class Orchestrator {
         return result;
       },
       onBatchDecisionRequest: async (requests, batchId) => {
-        const results = await this.decisionManager!.receiveBatch(requests, batchId);
+        const results = await this.decisionManager!.receiveBatch(
+          requests,
+          batchId,
+        );
         const runId = requests[0]?.workflowRunId;
         if (runId) {
           const run = loadWorkflowRun(this.workspaceRoot, runId);
@@ -179,9 +184,16 @@ export class Orchestrator {
     // 1. Scan Docker for containers with autodev-worktree labels that have no
     //    corresponding SQLite registry entry, and clean them up.
     try {
-      const { execSync } = await import("node:child_process");
-      const dockerContainers = execSync(
-        "docker ps -a --filter label=autodev-worktree --format '{{.ID}} {{.Label \"autodev-worktree\"}}'",
+      const dockerContainers = execFileSync(
+        "docker",
+        [
+          "ps",
+          "-a",
+          "--filter",
+          "label=autodev-worktree",
+          "--format",
+          '{{.ID}} {{.Label "autodev-worktree"}}',
+        ],
         { encoding: "utf-8" },
       ).trim();
 
@@ -193,12 +205,25 @@ export class Orchestrator {
 
         for (const line of dockerContainers.split("\n")) {
           const [containerId, worktreePath] = line.split(" ");
-          if (containerId && worktreePath && !registeredPaths.has(worktreePath)) {
+          if (
+            containerId &&
+            worktreePath &&
+            !registeredPaths.has(worktreePath)
+          ) {
             logger.info(
               `[auto-dev] Cleaning up orphaned container ${containerId} (${worktreePath})`,
             );
             try {
-              execSync(`docker stop --time=30 ${containerId} 2>/dev/null; docker rm --force ${containerId} 2>/dev/null`, { stdio: "ignore" });
+              execFileSync("docker", ["stop", "--time=30", containerId], {
+                stdio: "ignore",
+              });
+            } catch {
+              /* best-effort */
+            }
+            try {
+              execFileSync("docker", ["rm", "--force", containerId], {
+                stdio: "ignore",
+              });
             } catch {
               /* best-effort */
             }
@@ -214,12 +239,17 @@ export class Orchestrator {
     for (const entry of allWorkspaces) {
       try {
         // oxlint-disable-next-line no-await-in-loop
-        const { execSync } = await import("node:child_process");
-        const status = execSync(
-          `docker inspect ${entry.containerId} --format '{{.State.Status}}' 2>/dev/null || echo "not_found"`,
-          { encoding: "utf-8" },
-        ).trim();
-        if (status === "not_found") {
+        let status: string;
+        try {
+          status = execFileSync(
+            "docker",
+            ["inspect", entry.containerId, "--format", "{{.State.Status}}"],
+            { encoding: "utf-8" },
+          ).trim();
+        } catch {
+          status = "not_found";
+        }
+        if (status === "not_found" || status === "") {
           logger.info(
             `[auto-dev] Cleaning up stale registry entry for issue #${entry.issueNumber} (container not found)`,
           );
@@ -233,8 +263,10 @@ export class Orchestrator {
 
     // 3. Prune stale git worktrees
     try {
-      const { execSync } = await import("node:child_process");
-      execSync("git worktree prune", { cwd: this.workspaceRoot, stdio: "ignore" });
+      execFileSync("git", ["worktree", "prune"], {
+        cwd: this.workspaceRoot,
+        stdio: "ignore",
+      });
     } catch {
       /* best-effort */
     }
@@ -332,14 +364,6 @@ export class Orchestrator {
     // 3. PR-First: initial commit, push, create PR
     let prNumber: number | null = null;
     try {
-      const initFile = resolve(
-        workspaceInfo.worktreePath,
-        `.auto-dev-init-${run.id}.md`,
-      );
-      writeFileSync(
-        initFile,
-        `# Auto-Dev Run ${run.id}\n\nIssue: #${result.issueNumber}\nBranch: ${run.branch}\n`,
-      );
       this.workspaceManager!.getGitManager().commitAndPush(
         run.branch,
         `chore: auto-dev init for issue #${result.issueNumber}`,
@@ -384,9 +408,7 @@ export class Orchestrator {
           renderClaimComment(run, prNumber),
         );
       } catch (err) {
-        logger.error(
-          `[auto-dev] Failed to post claim comment: ${String(err)}`,
-        );
+        logger.error(`[auto-dev] Failed to post claim comment: ${String(err)}`);
       }
 
       this.auditLogger!.log({
@@ -412,13 +434,18 @@ export class Orchestrator {
     }
 
     await this.workflowManager!.updateStatus(run.id, "running");
-    const agentDef = result.agentDefinition || this.config!.defaultAgent;
+    const agentDef = result.agentDefinition ?? this.config!.defaultAgent;
     const agentDefinitionFile = this.config!.agents[agentDef]?.definition;
 
     const issueContext = [
       `## Issue #${result.issueNumber}: ${result.title}`,
       "",
       result.body,
+      "",
+      "## Instructions",
+      "- Work in the current directory (the git worktree for this issue)",
+      "- After making changes, stage and commit them with a descriptive commit message",
+      "- Do NOT push — auto-dev will handle pushing",
       "",
       "## Metadata",
       `- Repo: ${this.repoFullName}`,
@@ -463,13 +490,20 @@ export class Orchestrator {
           this.activeRuns.delete(run.id);
           await this.workflowManager!.updateStatus(run.id, finalStatus);
 
+          // Push agent's local commits BEFORE enabling auto-merge so the PR
+          // includes the agent's commits when it merges.
+          if (workspaceInfo && run.branch && code === 0) {
+            this.workspaceManager!.getGitManager().tryPush(
+              run.branch,
+              workspaceInfo.worktreePath,
+            );
+          }
+
           // Enable auto-merge on successful completion
           if (code === 0 && prNumber) {
             try {
               this.prManager!.enableAutoMerge(prNumber);
-              logger.info(
-                `[auto-dev] Auto-merge enabled for PR #${prNumber}`,
-              );
+              logger.info(`[auto-dev] Auto-merge enabled for PR #${prNumber}`);
             } catch (err) {
               logger.error(
                 `[auto-dev] Failed to enable auto-merge for PR #${prNumber}: ${String(err)}`,
@@ -565,10 +599,7 @@ export class Orchestrator {
           // Clean up workspace
           if (workspaceInfo) {
             await this.workspaceManager!.destroy(workspaceInfo);
-            await unregisterWorkspace(
-              this.workspaceRoot,
-              result.issueNumber,
-            );
+            await unregisterWorkspace(this.workspaceRoot, result.issueNumber);
           }
         }
       }
@@ -600,9 +631,8 @@ export class Orchestrator {
     commentBody: string,
     prNumber: number,
   ): Promise<void> {
-    const { parseFrontmatter, stripFrontmatter } = await import(
-      "../shared/frontmatter-parser.js"
-    );
+    const { parseFrontmatter, stripFrontmatter } =
+      await import("../shared/frontmatter-parser.js");
     const frontmatterConfig = parseFrontmatter(commentBody);
 
     const agentDefinition = frontmatterConfig?.agent ?? "retrigger";

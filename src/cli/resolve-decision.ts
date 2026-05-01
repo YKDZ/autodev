@@ -1,8 +1,8 @@
 import { parseArgs } from "node:util";
 
-import { logger } from "../shared/logger.js";
 import { loadConfig } from "../config/loader.js";
 import { DecisionManager } from "../decision-service/decision-manager.js";
+import { logger } from "../shared/logger.js";
 import { ensureStateDirs } from "../state-store/index.js";
 
 export const runResolveDecision = async (args: string[]): Promise<void> => {
