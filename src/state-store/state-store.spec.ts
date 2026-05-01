@@ -156,7 +156,7 @@ describe("DecisionBlock CRUD", () => {
 
   it("listDecisions returns all decisions", async () => {
     for (let i = 0; i < 5; i += 1) {
-      // eslint-disable-next-line no-await-in-loop
+      // oxlint-disable-next-line no-await-in-loop
       await saveDecision(tmpDir, makeDecision());
     }
     const list = listDecisions(tmpDir);
