@@ -419,12 +419,14 @@ export const getReadyLabelAdder = (
     };
     const nodes =
       result.data?.repository?.issue?.timelineItems?.nodes ?? [];
+    // Return the most recent actor who added auto-dev:ready (last occurrence)
+    let lastAdder: string | null = null;
     for (const node of nodes) {
       if (node.label?.name === "auto-dev:ready" && node.actor?.login) {
-        return node.actor.login;
+        lastAdder = node.actor.login;
       }
     }
-    return null;
+    return lastAdder;
   } catch {
     return null;
   }
