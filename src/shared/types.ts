@@ -15,23 +15,37 @@ export type WorkflowStatus =
   | "waiting_decision"
   | "waiting_human"
   | "blocked"
+  | "cancelled"
+  | "stale"
+  | "abandoned"
+  | "cleaned"
   | "completed"
   | "failed";
 
 export interface WorkflowRun {
   id: string;
   issueNumber: number;
+  issueTitle: string;
+  issueBody: string;
+  issueLabels: string[];
+  issueAuthor: string | null;
   repoFullName: string;
   status: WorkflowStatus;
   branch: string;
   agentModel: AgentModel | null;
   agentEffort: AgentEffort | null;
   agentDefinition: string | null;
+  maxTurns: number | null;
+  maxDecisions: number | null;
+  permissionMode: string | null;
+  baseBranch: string;
   startedAt: string;
   updatedAt: string;
   decisionCount: number;
   pendingDecisionIds: string[];
   prNumber: number | null;
+  lastPushedSha: string | null;
+  lastObservedRemoteSha: string | null;
 }
 
 // ── Decision types ────────────────────────────────────────────────────
@@ -128,6 +142,7 @@ export interface FrontmatterConfig {
   maxDecisions: number | null;
   maxTurns: number | null;
   permissionMode: string | null;
+  baseBranch: string | null;
 }
 
 // ── Workspace registry types ──────────────────────────────────────────
@@ -137,6 +152,9 @@ export interface WorkspaceRegistryEntry {
   runId: string;
   worktreePath: string;
   containerId: string;
+  remoteWorkspaceFolder: string;
+  containerSource: "devcontainer" | "fallback";
+  image: string | null;
   branch: string;
   createdAt: string; // ISO timestamp
 }
@@ -147,8 +165,13 @@ export interface PollResult {
   issueNumber: number;
   title: string;
   body: string;
+  labels: string[];
+  author: string | null;
   agentDefinition: string;
   agentModel: string | null;
   agentEffort: AgentEffort | null;
+  maxDecisions: number | null;
   maxTurns: number | null;
+  permissionMode: string | null;
+  baseBranch: string;
 }

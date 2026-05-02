@@ -36,7 +36,7 @@ fi
 
 REPO_FULL_NAME="${GITHUB_REPOSITORY:-owner/repo}"
 DIST="/opt/auto-dev/dist/cli.js"
-export MOON_WORKSPACE_ROOT="${AUTO_DEV_WORKSPACE_ROOT:-/opt/repo}"
+export WORKSPACE_ROOT="${AUTO_DEV_WORKSPACE_ROOT:-/opt/repo}"
 
 echo "[auto-dev] Starting coordinator for $REPO_FULL_NAME..."
 exec node "${DIST}" start --repo "$REPO_FULL_NAME"

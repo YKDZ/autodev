@@ -14,6 +14,8 @@ export interface AgentContext {
   agentDefinitionFile?: string;
   model: string | null;
   effort: string | null;
+  maxTurns?: number | null;
+  permissionMode?: string | null;
   /** Main workspace root (used for state/logs and agent definition lookup). */
   workspaceRoot: string;
   /** Working directory for the agent process. Defaults to workspaceRoot when not set. */
@@ -26,6 +28,8 @@ export interface AgentContext {
   decisionHost?: string;
   /** Decision server TCP port, injected into the container so agents can call auto-dev request-decision via TCP. */
   decisionPort?: number;
+  /** Shared decision token for request authentication. */
+  decisionToken?: string;
 }
 
 export interface AgentInvoker {

@@ -27,17 +27,27 @@ export class WorkflowManager {
     const run: WorkflowRun = {
       id: randomUUID(),
       issueNumber: result.issueNumber,
+      issueTitle: result.title,
+      issueBody: result.body,
+      issueLabels: result.labels,
+      issueAuthor: result.author,
       repoFullName,
       status: "pending",
       branch: deriveBranch(result.issueNumber),
       agentDefinition: result.agentDefinition,
       agentModel: result.agentModel,
       agentEffort: result.agentEffort,
+      maxTurns: result.maxTurns,
+      maxDecisions: result.maxDecisions,
+      permissionMode: result.permissionMode,
+      baseBranch: result.baseBranch,
       startedAt: now,
       updatedAt: now,
       decisionCount: 0,
       pendingDecisionIds: [],
       prNumber: null,
+      lastPushedSha: null,
+      lastObservedRemoteSha: null,
     };
 
     await saveWorkflowRun(this.workspaceRoot, run);
@@ -55,7 +65,15 @@ export class WorkflowManager {
 
   listActive(): WorkflowRun[] {
     return listWorkflowRuns(this.workspaceRoot).filter(
-      (r) => !["completed", "failed"].includes(r.status),
+      (r) =>
+        ![
+          "completed",
+          "failed",
+          "cancelled",
+          "abandoned",
+          "cleaned",
+          "stale",
+        ].includes(r.status),
     );
   }
 

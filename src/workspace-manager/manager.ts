@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+
 import type { WorkspaceRegistryEntry } from "@/shared/types.js";
 
 import { logger } from "@/shared/logger.js";
@@ -36,19 +38,37 @@ export class WorkspaceManager {
    * Full lifecycle: create branch, worktree, start devcontainer.
    */
   async create(issueNumber: number, runId: string): Promise<WorkspaceInfo> {
-    const { branch, worktreePath } = await this.git.createBranch(issueNumber);
+    return this.createFromBase(issueNumber, runId, "main");
+  }
+
+  async createFromBase(
+    issueNumber: number,
+    runId: string,
+    baseBranch: string,
+  ): Promise<WorkspaceInfo> {
+    const { branch, worktreePath } = await this.git.createBranch(
+      issueNumber,
+      baseBranch,
+    );
 
     logger.info(
       `[auto-dev] Starting devcontainer for worktree ${worktreePath}...`,
     );
-    const { containerId, remoteWorkspaceFolder } =
-      this.devcontainer.start(worktreePath);
+    const { containerId, remoteWorkspaceFolder, containerSource, image } =
+      this.devcontainer.startWithMetadata(worktreePath, {
+        runId,
+        issueNumber,
+        branch,
+      });
 
     const entry: WorkspaceRegistryEntry = {
       issueNumber,
       runId,
       worktreePath,
       containerId,
+      remoteWorkspaceFolder,
+      containerSource,
+      image,
       branch,
       createdAt: new Date().toISOString(),
     };
@@ -72,20 +92,31 @@ export class WorkspaceManager {
 
     let containerId = "";
     let remoteWorkspaceFolder = "";
+    let containerSource: "devcontainer" | "fallback" = "devcontainer";
+    let image: string | null = null;
     const existing = findWorkspaceByIssueNumber(
       this.workspaceRoot,
       issueNumber,
     );
     if (existing && this.devcontainer.isRunning(existing.containerId)) {
       containerId = existing.containerId;
-      // Compute remote folder from stored worktree path
-      // oxlint-disable-next-line typescript/unbound-method
-      const { basename } = await import("node:path");
-      remoteWorkspaceFolder = `/workspaces/${basename(worktreePath)}`;
+      if (existing.remoteWorkspaceFolder) {
+        remoteWorkspaceFolder = existing.remoteWorkspaceFolder;
+      } else {
+        remoteWorkspaceFolder = `/workspaces/${basename(worktreePath)}`;
+      }
+      containerSource = existing.containerSource;
+      image = existing.image;
     } else {
-      const result = this.devcontainer.start(worktreePath);
+      const result = this.devcontainer.startWithMetadata(worktreePath, {
+        runId,
+        issueNumber,
+        branch,
+      });
       containerId = result.containerId;
       remoteWorkspaceFolder = result.remoteWorkspaceFolder;
+      containerSource = result.containerSource;
+      image = result.image;
     }
 
     const entry: WorkspaceRegistryEntry = {
@@ -93,6 +124,9 @@ export class WorkspaceManager {
       runId,
       worktreePath,
       containerId,
+      remoteWorkspaceFolder,
+      containerSource,
+      image,
       branch,
       createdAt: new Date().toISOString(),
     };

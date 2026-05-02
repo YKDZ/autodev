@@ -20,6 +20,7 @@ export interface SocketServerOptions {
   port: number;
   config: AutoDevConfig;
   workspaceRoot: string;
+  decisionToken?: string;
   onDecisionRequest: (request: DecisionRequest) => Promise<{
     accepted: boolean;
     remainingDecisions: number;
@@ -207,6 +208,39 @@ export class DecisionSocketServer {
       return { buffer, decisionId };
     }
 
+    const expectedToken = this.options.decisionToken ?? "";
+    if (expectedToken) {
+      const receivedToken =
+        parsed !== null &&
+          typeof parsed === "object" &&
+          "token" in parsed &&
+          typeof (parsed as Record<string, unknown>).token === "string"
+          ? ((parsed as Record<string, unknown>).token as string)
+          : "";
+      if (receivedToken !== expectedToken) {
+        socket.write(JSON.stringify({ error: "Unauthorized decision request" }) + "\n");
+        socket.end();
+        return { buffer, decisionId };
+      }
+    }
+
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      "getResolution" in parsed &&
+      typeof (parsed as Record<string, unknown>)["getResolution"] === "string"
+    ) {
+      const requestId = (parsed as Record<string, string>).getResolution;
+      const response = await this.options.onGetResolution(requestId);
+      if (response) {
+        socket.write(JSON.stringify({ resolved: true, response }) + "\n");
+      } else {
+        socket.write(JSON.stringify({ resolved: false }) + "\n");
+      }
+      socket.end();
+      return { buffer, decisionId };
+    }
+
     if (
       parsed !== null &&
       typeof parsed === "object" &&
@@ -243,10 +277,11 @@ export class DecisionSocketServer {
     let request: DecisionRequest;
     try {
       request = DecisionRequestSchema.parse(parsed);
-    } catch {
+    } catch (err) {
       const errorResp =
         JSON.stringify({
-          error: "Invalid JSON in decision request",
+          error: "Invalid decision request payload",
+          details: String(err),
         }) + "\n";
       socket.write(errorResp);
       socket.end();

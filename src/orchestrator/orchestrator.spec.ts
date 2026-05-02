@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+import type { WorkflowRun } from "@/shared/types.js";
+
 vi.mock("@/shared/gh-cli.js", () => ({
   listIssues: vi.fn().mockReturnValue([]),
 }));
@@ -16,6 +18,47 @@ vi.mock("../config/loader.js", () => ({
     maxDecisionPerRun: 20,
     maxImplCycles: 5,
   }),
+}));
+
+vi.mock("../workspace-manager/index.js", () => ({
+  WorkspaceManager: class {
+    getGitManager() {
+      return {
+        ensureRepo: async () => { },
+        commitAndPush: async () => { },
+        tryPush: async () => true,
+      };
+    }
+
+    async create() {
+      return {
+        branch: "auto-dev/issue-1",
+        worktreePath: "/tmp/worktree",
+        containerId: "",
+        remoteWorkspaceFolder: "",
+      };
+    }
+
+    async createFromBase() {
+      return {
+        branch: "auto-dev/issue-1",
+        worktreePath: "/tmp/worktree",
+        containerId: "",
+        remoteWorkspaceFolder: "",
+      };
+    }
+
+    async ensure() {
+      return {
+        branch: "auto-dev/issue-1",
+        worktreePath: "/tmp/worktree",
+        containerId: "",
+        remoteWorkspaceFolder: "",
+      };
+    }
+
+    async destroy() { }
+  },
 }));
 
 import { ensureStateDirs } from "@/state-store/index.js";
@@ -84,7 +127,60 @@ describe("Orchestrator", () => {
       body: "<!-- auto-dev-bot -->\n@d1 yes",
       user: { login: "auto-dev[bot]" },
     };
-    const result = fn([botComment], "some-run-id");
+    const result = fn(
+      [botComment],
+      "some-run-id",
+      "issue_decision_resolution",
+    );
     expect(result).toHaveLength(0);
+  });
+
+  it("buildCreatePRIssueContext includes issue body and labels", () => {
+    const orchestrator = new Orchestrator(tmpDir, "owner/repo");
+    // Seed config accessed by the helper through this.config
+    orchestrator["config"] = {
+      defaultAgent: "full-pipeline",
+      pollIntervalSec: 30,
+      maxDecisionPerRun: 20,
+      maxImplCycles: 5,
+      maxConcurrentRuns: 3,
+      agents: {},
+    };
+
+    const run: WorkflowRun = {
+      id: "run-1",
+      issueNumber: 42,
+      issueTitle: "Fix parser",
+      issueBody: "Please keep backward compatibility.",
+      issueLabels: ["auto-dev:ready", "bug"],
+      issueAuthor: "octocat",
+      repoFullName: "owner/repo",
+      status: "running",
+      branch: "auto-dev/issue-42",
+      agentModel: "sonnet",
+      agentEffort: "high",
+      agentDefinition: "full-pipeline",
+      maxTurns: 12,
+      maxDecisions: 4,
+      permissionMode: "plan",
+      baseBranch: "main",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      decisionCount: 0,
+      pendingDecisionIds: [],
+      prNumber: 100,
+      lastPushedSha: null,
+      lastObservedRemoteSha: null,
+    };
+
+    const content = orchestrator["buildCreatePRIssueContext"](
+      run,
+      100,
+      "full-pipeline",
+    ) as string;
+
+    expect(content).toContain("Please keep backward compatibility.");
+    expect(content).toContain("- auto-dev:ready");
+    expect(content).toContain("- bug");
   });
 });

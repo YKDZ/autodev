@@ -26,7 +26,9 @@ services:
 
     ports:
       - "${SSH_PORT:-2222}:22"
-      - "${AUTO_DEV_DECISION_PORT:-3000}:3000"
+      # Decision service is intended for internal container networking.
+      # Expose only when explicitly needed for diagnostics.
+      # - "${AUTO_DEV_DECISION_PORT:-3000}:3000"
 
     environment:
       # GitHub App credentials (required)
@@ -57,8 +59,8 @@ services:
     volumes:
       # Mount Docker socket for devcontainer management
       - /var/run/docker.sock:/var/run/docker.sock
-      # Map worktree path to host so devcontainer can bind-mount it
-      - ./autodev-data:/opt/repo/tools/auto-dev/worktrees
+      # Persist full workspace root, including .git, state, and worktrees
+      - ./autodev-data:/opt/repo
       # Persist SSH host keys across restarts
       - autodev-ssh:/etc/ssh
 

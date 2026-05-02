@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { networkInterfaces } from "node:os";
 
-import type { WorkflowRun } from "@/shared/types.js";
+import type { WorkflowRun, WorkflowStatus } from "@/shared/types.js";
 
 import {
   renderWorkspaceComment,
@@ -17,6 +17,7 @@ import {
 } from "@/shared/comment-templates.js";
 import {
   createComment,
+  getIssue,
   listIssueComments,
   listPRComments,
   listPRs,
@@ -37,6 +38,9 @@ import {
   listWorkflowRuns,
   unregisterWorkspace,
   listAllWorkspaces,
+  isEventProcessed,
+  markEventProcessed,
+  cleanupProcessedEvents,
 } from "@/state-store/index.js";
 
 import type { AutoDevConfig } from "../config/types.js";
@@ -100,10 +104,9 @@ export class Orchestrator {
   /** TCP decision server host/port resolved at startup. */
   private decisionHost: string = "127.0.0.1";
   private decisionPort: number = 3000;
+  private decisionToken: string = "";
   /** runId -> issueNumber for active runs */
   private readonly activeRuns: Map<string, number> = new Map();
-  /** GitHub comment IDs that have already been processed */
-  private readonly processedCommentIds: Set<string> = new Set();
   private commentPollTimer: ReturnType<typeof setTimeout> | null = null;
   private prTriggerPollTimer: ReturnType<typeof setTimeout> | null = null;
   private issueCommentPollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -122,6 +125,7 @@ export class Orchestrator {
 
     this.decisionPort = resolveDecisionPort();
     this.decisionHost = resolveDecisionHost();
+    this.decisionToken = process.env.AUTO_DEV_DECISION_TOKEN ?? randomUUID();
 
     this.decisionManager = new DecisionManager(this.workspaceRoot, this.config);
     this.workflowManager = new WorkflowManager(this.workspaceRoot);
@@ -129,6 +133,7 @@ export class Orchestrator {
       this.workspaceRoot,
       this.repoFullName,
     );
+    await this.workspaceManager.getGitManager().ensureRepo();
     this.dispatcher = new AgentDispatcher();
     this.auditLogger = new AuditLogger(this.workspaceRoot);
     this.prManager = new PRManager(this.repoFullName);
@@ -138,6 +143,7 @@ export class Orchestrator {
       port: resolveDecisionPort(),
       config: this.config,
       workspaceRoot: this.workspaceRoot,
+      decisionToken: this.decisionToken,
       onDecisionRequest: async (request) => {
         const result = await this.decisionManager!.receiveRequest(request);
         if (result.accepted) {
@@ -191,7 +197,8 @@ export class Orchestrator {
                 recommendation: d.recommendation,
                 context: d.context,
               })),
-              this.config!.maxDecisionPerRun - run.decisionCount,
+              (run.maxDecisions ?? this.config!.maxDecisionPerRun) -
+              run.decisionCount,
             );
             const targetNumber = run.prNumber ?? run.issueNumber;
             try {
@@ -235,7 +242,16 @@ export class Orchestrator {
    */
   private rebuildActiveRuns(): void {
     const activeRunsFromStore = listWorkflowRuns(this.workspaceRoot).filter(
-      (r) => !["completed", "failed", "workspace_ready"].includes(r.status),
+      (r) =>
+        ![
+          "completed",
+          "failed",
+          "workspace_ready",
+          "cancelled",
+          "stale",
+          "abandoned",
+          "cleaned",
+        ].includes(r.status),
     );
     for (const run of activeRunsFromStore) {
       this.activeRuns.set(run.id, run.issueNumber);
@@ -339,6 +355,15 @@ export class Orchestrator {
     } catch {
       /* best-effort */
     }
+
+    try {
+      const deleted = await cleanupProcessedEvents(this.workspaceRoot, 30);
+      if (deleted > 0) {
+        logger.info(`[auto-dev] Cleaned ${deleted} old processed comment cursor(s)`);
+      }
+    } catch {
+      /* best-effort */
+    }
   }
 
   async stop(): Promise<void> {
@@ -419,7 +444,11 @@ export class Orchestrator {
 
     // 2. Create workspace (branch + worktree + devcontainer)
     try {
-      await this.workspaceManager!.create(result.issueNumber, run.id);
+      await this.workspaceManager!.createFromBase(
+        result.issueNumber,
+        run.id,
+        run.baseBranch,
+      );
       logger.info(
         `[auto-dev] Branch ${run.branch} + workspace created for issue #${result.issueNumber}`,
       );
@@ -486,7 +515,9 @@ export class Orchestrator {
   }
 
   /** Create a Draft PR for the given workspace_ready run. */
-  private async handleCreatePR(run: WorkflowRun): Promise<void> {
+  private async handleCreatePR(initialRun: WorkflowRun): Promise<void> {
+    const run = await this.hydrateIssueContextIfMissing(initialRun);
+
     if (run.prNumber) {
       // PR already exists — check if it's still open
       try {
@@ -528,11 +559,15 @@ export class Orchestrator {
 
     // Commit + push
     try {
-      await this.workspaceManager!.getGitManager().commitAndPush(
+      const pushMeta = await this.workspaceManager!.getGitManager().commitAndPush(
         run.branch,
         `chore: auto-dev init for issue #${run.issueNumber}`,
         workspaceInfo.worktreePath,
       );
+      run.lastPushedSha = pushMeta.pushedSha;
+      run.lastObservedRemoteSha = pushMeta.observedRemoteSha;
+      run.updatedAt = new Date().toISOString();
+      await saveWorkflowRun(this.workspaceRoot, run);
     } catch (err) {
       logger.error(
         `[auto-dev] Failed to push for create-pr issue #${run.issueNumber}: ${String(err)}`,
@@ -542,13 +577,25 @@ export class Orchestrator {
     // Create Draft PR
     let prNumber: number | null = null;
     try {
-      const prTitle = `[Auto-Dev] Issue #${run.issueNumber}`;
-      const prBody = `Closes #${run.issueNumber}\n\nRun ID: \`${run.id}\``;
+      const prTitle = `[Auto-Dev] #${run.issueNumber}: ${run.issueTitle || "Untitled issue"}`;
+      const prBody = [
+        `Closes #${run.issueNumber}`,
+        "",
+        `Run ID: \`${run.id}\``,
+        "",
+        "---",
+        "",
+        "## Issue Context",
+        "",
+        `### ${run.issueTitle || `Issue #${run.issueNumber}`}`,
+        "",
+        run.issueBody || "(Issue body is empty)",
+      ].join("\n");
       const pr = this.prManager!.create(
         run.branch,
         prTitle,
         prBody,
-        "main",
+        run.baseBranch,
         true,
       );
       prNumber = pr.number;
@@ -566,11 +613,11 @@ export class Orchestrator {
           renderWorkspaceComment(run, {
             model: run.agentModel,
             effort: run.agentEffort,
-            maxDecisions: this.config!.maxDecisionPerRun,
+            maxDecisions: run.maxDecisions ?? this.config!.maxDecisionPerRun,
             agentDefinition: run.agentDefinition,
             autoMerge: false,
-            issueTitle: `Issue #${run.issueNumber}`,
-            issueBody: "",
+            issueTitle: run.issueTitle || `Issue #${run.issueNumber}`,
+            issueBody: run.issueBody,
           }),
         );
       } catch {
@@ -616,21 +663,17 @@ export class Orchestrator {
 
     const agentDef = run.agentDefinition ?? this.config!.defaultAgent;
     const agentDefinitionFile = this.config!.agents[agentDef]?.definition;
-
-    const issueContext = [
-      `## Issue #${run.issueNumber}`,
-      "",
-      "## Instructions",
-      "- Work in the current directory (the git worktree for this issue)",
-      "- After making changes, stage and commit them with a descriptive commit message",
-      "- Do NOT push — auto-dev will handle pushing",
-      "",
-      "## Metadata",
-      `- Repo: ${this.repoFullName}`,
-      `- Branch: ${run.branch}`,
-      `- PR: #${prNumber}`,
-      `- Run ID: ${run.id}`,
-    ].join("\n");
+    if (prNumber === null) {
+      logger.error(
+        `[auto-dev] Missing PR number for issue #${run.issueNumber}, aborting dispatch`,
+      );
+      return;
+    }
+    const issueContext = this.buildCreatePRIssueContext(
+      run,
+      prNumber,
+      agentDef,
+    );
 
     this.auditLogger!.log({
       id: randomUUID(),
@@ -648,6 +691,8 @@ export class Orchestrator {
         agentDefinitionFile,
         model: run.agentModel,
         effort: run.agentEffort,
+        maxTurns: run.maxTurns,
+        permissionMode: run.permissionMode,
         workspaceRoot: this.workspaceRoot,
         agentWorkdir: workspaceInfo.containerId
           ? workspaceInfo.remoteWorkspaceFolder
@@ -656,6 +701,7 @@ export class Orchestrator {
         workflowRunId: run.id,
         decisionHost: this.decisionHost,
         decisionPort: this.decisionPort,
+        decisionToken: this.decisionToken,
       })) {
         if (event.type === "stdout" && event.data) {
           stdoutBuf += event.data;
@@ -722,10 +768,10 @@ export class Orchestrator {
           const pushFn =
             workspaceInfo && run.branch
               ? async () =>
-                  this.workspaceManager!.getGitManager().tryPush(
-                    run.branch,
-                    workspaceInfo.worktreePath,
-                  )
+                this.workspaceManager!.getGitManager().tryPush(
+                  run.branch,
+                  workspaceInfo.worktreePath,
+                )
               : null;
 
           if (prNumber) {
@@ -793,6 +839,71 @@ export class Orchestrator {
         await this.workspaceManager!.destroy(workspaceInfo);
         await unregisterWorkspace(this.workspaceRoot, run.issueNumber);
       }
+    }
+  }
+
+  private buildCreatePRIssueContext(
+    run: WorkflowRun,
+    prNumber: number,
+    agentDef: string,
+  ): string {
+    const labels =
+      run.issueLabels.length > 0
+        ? run.issueLabels.map((label) => `- ${label}`).join("\n")
+        : "- (none)";
+    return [
+      "## Issue",
+      "",
+      `#${run.issueNumber} ${run.issueTitle || "Untitled issue"}`,
+      "",
+      run.issueBody || "(Issue body is empty)",
+      "",
+      "## Labels",
+      "",
+      labels,
+      "",
+      "## Run Configuration",
+      "",
+      `- Agent: ${agentDef}`,
+      `- Model: ${run.agentModel ?? "default"}`,
+      `- Effort: ${run.agentEffort ?? "default"}`,
+      `- Max turns: ${run.maxTurns ?? "default"}`,
+      `- Max decisions: ${run.maxDecisions ?? this.config!.maxDecisionPerRun}`,
+      `- Permission mode: ${run.permissionMode ?? "default"}`,
+      "",
+      "## Workspace Instructions",
+      "",
+      "- Work in the current directory (the git worktree for this issue)",
+      "- After making changes, stage and commit them with a descriptive commit message",
+      "- Do NOT push — auto-dev will handle pushing",
+      "",
+      "## Metadata",
+      `- Repo: ${this.repoFullName}`,
+      `- Branch: ${run.branch}`,
+      `- PR: #${prNumber}`,
+      `- Run ID: ${run.id}`,
+    ].join("\n");
+  }
+
+  private async hydrateIssueContextIfMissing(run: WorkflowRun): Promise<WorkflowRun> {
+    if (run.issueTitle.trim() && run.issueBody.trim()) {
+      return run;
+    }
+
+    try {
+      const latest = getIssue(this.repoFullName, run.issueNumber);
+      run.issueTitle = latest.title;
+      run.issueBody = latest.body;
+      run.issueLabels = latest.labels.map((label) => label.name);
+      run.issueAuthor = latest.author?.login ?? null;
+      run.updatedAt = new Date().toISOString();
+      await saveWorkflowRun(this.workspaceRoot, run);
+      return run;
+    } catch (err) {
+      logger.warn(
+        `[auto-dev] Failed to hydrate issue context for #${run.issueNumber}: ${String(err)}`,
+      );
+      return run;
     }
   }
 
@@ -874,6 +985,8 @@ export class Orchestrator {
         agentDefinitionFile,
         model: run.agentModel,
         effort: run.agentEffort,
+        maxTurns: run.maxTurns,
+        permissionMode: run.permissionMode,
         workspaceRoot: this.workspaceRoot,
         agentWorkdir: workspaceInfo.containerId
           ? workspaceInfo.remoteWorkspaceFolder
@@ -882,6 +995,7 @@ export class Orchestrator {
         workflowRunId: run.id,
         decisionHost: this.decisionHost,
         decisionPort: this.decisionPort,
+        decisionToken: this.decisionToken,
       })) {
         if (event.type === "stdout" && event.data) {
           rawStdout += event.data;
@@ -980,8 +1094,11 @@ export class Orchestrator {
     try {
       const comments = listIssueComments(this.repoFullName, run.issueNumber);
       for (const comment of comments) {
-        if (this.processedCommentIds.has(comment.id)) continue;
-        this.processedCommentIds.add(comment.id);
+        if (
+          isEventProcessed(this.workspaceRoot, "issue_trigger", comment.id)
+        ) {
+          continue;
+        }
         if (comment.body.includes("<!-- auto-dev-bot -->")) continue;
 
         const author = comment.user?.login ?? comment.author?.login ?? "";
@@ -1001,6 +1118,13 @@ export class Orchestrator {
           comment.body,
           author,
         );
+        // oxlint-disable-next-line no-await-in-loop
+        await markEventProcessed(this.workspaceRoot, {
+          handler: "issue_trigger",
+          githubCommentId: comment.id,
+          repoFullName: this.repoFullName,
+          issueOrPrNumber: run.issueNumber,
+        });
         break;
       }
     } catch (err) {
@@ -1046,7 +1170,7 @@ export class Orchestrator {
             `[auto-dev] Issue #${run.issueNumber} is closed — cleaning up workspace`,
           );
           // oxlint-disable-next-line no-await-in-loop
-          await this.cleanupRun(run);
+          await this.cleanupRun(run, "cancelled");
           continue;
         }
 
@@ -1059,7 +1183,7 @@ export class Orchestrator {
               `[auto-dev] PR #${run.prNumber} merged — cleaning up workspace for issue #${run.issueNumber}`,
             );
             // oxlint-disable-next-line no-await-in-loop
-            await this.cleanupRun(run);
+            await this.cleanupRun(run, "completed");
           }
         }
       } catch {
@@ -1068,7 +1192,10 @@ export class Orchestrator {
     }
   }
 
-  private async cleanupRun(run: WorkflowRun): Promise<void> {
+  private async cleanupRun(
+    run: WorkflowRun,
+    finalStatus: WorkflowStatus = "cleaned",
+  ): Promise<void> {
     try {
       const allWorkspaces = listAllWorkspaces(this.workspaceRoot);
       const ws = allWorkspaces.find((w) => w.issueNumber === run.issueNumber);
@@ -1085,7 +1212,7 @@ export class Orchestrator {
       /* best-effort */
     }
     try {
-      await this.workflowManager!.updateStatus(run.id, "completed");
+      await this.workflowManager!.updateStatus(run.id, finalStatus);
     } catch {
       /* best-effort */
     }
@@ -1192,6 +1319,8 @@ export class Orchestrator {
         agentDefinitionFile: retriggerDefinitionFile,
         model,
         effort,
+        maxTurns: run.maxTurns,
+        permissionMode: run.permissionMode,
         workspaceRoot: this.workspaceRoot,
         agentWorkdir: workspaceInfo.containerId
           ? workspaceInfo.remoteWorkspaceFolder
@@ -1200,6 +1329,7 @@ export class Orchestrator {
         workflowRunId: run.id,
         decisionHost: this.decisionHost,
         decisionPort: this.decisionPort,
+        decisionToken: this.decisionToken,
       })) {
         if (event.type === "stdout" && event.data) {
           retriggerStdout += event.data;
@@ -1260,21 +1390,23 @@ export class Orchestrator {
       author?: { login: string };
     }>,
     runId: string,
+    handler: "issue_decision_resolution" | "pr_decision_resolution",
   ): Array<{
+    commentId: string;
     decisionId: string;
     choice: string;
     author: string;
     alias: string;
   }> {
     const tasks: Array<{
+      commentId: string;
       decisionId: string;
       choice: string;
       author: string;
       alias: string;
     }> = [];
     for (const comment of comments) {
-      if (this.processedCommentIds.has(comment.id)) continue;
-      this.processedCommentIds.add(comment.id);
+      if (isEventProcessed(this.workspaceRoot, handler, comment.id)) continue;
       if (comment.body.includes("<!-- auto-dev-bot -->")) continue;
       const author = comment.user?.login ?? comment.author?.login ?? "";
       if (author && !isAllowedUser(author)) continue;
@@ -1289,6 +1421,7 @@ export class Orchestrator {
         );
         if (pending) {
           tasks.push({
+            commentId: comment.id,
             decisionId: pending.id,
             choice,
             author,
@@ -1306,9 +1439,14 @@ export class Orchestrator {
   ): Promise<void> {
     try {
       const comments = listIssueComments(this.repoFullName, issueNumber);
-      const tasks = this.collectResolutionTasks(comments, runId);
+      const tasks = this.collectResolutionTasks(
+        comments,
+        runId,
+        "issue_decision_resolution",
+      );
+      const consumedCommentIds = new Set<string>();
       await Promise.all(
-        tasks.map(async ({ decisionId, choice, author, alias }) => {
+        tasks.map(async ({ commentId, decisionId, choice, author, alias }) => {
           try {
             await this.decisionManager!.resolve(
               decisionId,
@@ -1316,13 +1454,28 @@ export class Orchestrator {
               author,
               "issue_comment",
             );
+            consumedCommentIds.add(commentId);
             logger.info(
               `[auto-dev] Resolved ${decisionId} (${alias}) via issue comment by ${author} -> ${choice}`,
             );
-          } catch {
-            /* ignore */
+          } catch (err) {
+            consumedCommentIds.add(commentId);
+            logger.warn(
+              `[auto-dev] Failed to resolve ${decisionId} (${alias}) via issue comment: ${String(err)}`,
+            );
           }
         }),
+      );
+
+      await Promise.all(
+        [...consumedCommentIds].map(async (commentId) =>
+          markEventProcessed(this.workspaceRoot, {
+            handler: "issue_decision_resolution",
+            githubCommentId: commentId,
+            repoFullName: this.repoFullName,
+            issueOrPrNumber: issueNumber,
+          }),
+        ),
       );
     } catch (err) {
       logger.error(
@@ -1337,9 +1490,14 @@ export class Orchestrator {
   ): Promise<void> {
     try {
       const comments = listPRComments(this.repoFullName, prNumber);
-      const tasks = this.collectResolutionTasks(comments, runId);
+      const tasks = this.collectResolutionTasks(
+        comments,
+        runId,
+        "pr_decision_resolution",
+      );
+      const consumedCommentIds = new Set<string>();
       await Promise.all(
-        tasks.map(async ({ decisionId, choice, author, alias }) => {
+        tasks.map(async ({ commentId, decisionId, choice, author, alias }) => {
           try {
             await this.decisionManager!.resolve(
               decisionId,
@@ -1347,13 +1505,28 @@ export class Orchestrator {
               author,
               "pr_comment",
             );
+            consumedCommentIds.add(commentId);
             logger.info(
               `[auto-dev] Resolved ${decisionId} (${alias}) via PR comment by ${author} -> ${choice}`,
             );
-          } catch {
-            /* ignore */
+          } catch (err) {
+            consumedCommentIds.add(commentId);
+            logger.warn(
+              `[auto-dev] Failed to resolve ${decisionId} (${alias}) via PR comment: ${String(err)}`,
+            );
           }
         }),
+      );
+
+      await Promise.all(
+        [...consumedCommentIds].map(async (commentId) =>
+          markEventProcessed(this.workspaceRoot, {
+            handler: "pr_decision_resolution",
+            githubCommentId: commentId,
+            repoFullName: this.repoFullName,
+            issueOrPrNumber: prNumber,
+          }),
+        ),
       );
     } catch (err) {
       logger.error(
@@ -1398,8 +1571,11 @@ export class Orchestrator {
           const comments = listPRComments(this.repoFullName, pr.number);
 
           for (const comment of comments) {
-            if (this.processedCommentIds.has(comment.id)) continue;
-            this.processedCommentIds.add(comment.id);
+            if (
+              isEventProcessed(this.workspaceRoot, "pr_trigger", comment.id)
+            ) {
+              continue;
+            }
 
             if (comment.body.includes("<!-- auto-dev-bot -->")) continue;
             const author = comment.user?.login ?? comment.author?.login ?? "";
@@ -1429,6 +1605,13 @@ export class Orchestrator {
 
             // oxlint-disable-next-line no-await-in-loop
             await this.handlePRTrigger(run, comment.body, pr.number);
+            // oxlint-disable-next-line no-await-in-loop
+            await markEventProcessed(this.workspaceRoot, {
+              handler: "pr_trigger",
+              githubCommentId: comment.id,
+              repoFullName: this.repoFullName,
+              issueOrPrNumber: pr.number,
+            });
             break;
           }
         }

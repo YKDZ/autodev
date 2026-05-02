@@ -37,6 +37,9 @@ export class ClaudeCodeAdapter implements AgentInvoker {
     // Agent definition frontmatter provides defaults (lowest priority)
     const model = context.model ?? agentFm?.model ?? null;
     const effort = context.effort ?? agentFm?.effort ?? null;
+    const maxTurns = context.maxTurns ?? agentFm?.maxTurns ?? 200;
+    const permissionMode =
+      context.permissionMode ?? agentFm?.permissionMode ?? null;
 
     const prompt = `${defContent}\n\n## Issue Context\n\n${context.issueContext}`;
 
@@ -49,7 +52,7 @@ export class ClaudeCodeAdapter implements AgentInvoker {
       "--allowedTools",
       "Bash,Read,Write,Edit,Glob,Grep",
       "--max-turns",
-      "200",
+      String(maxTurns),
     ];
 
     if (model) args.push("--model", model);
@@ -65,7 +68,7 @@ export class ClaudeCodeAdapter implements AgentInvoker {
       })(),
       ...forwardHostEnv(),
       CLAUDE_CODE_TOOL_TIMEOUT_MS: "86400000",
-      MOON_WORKSPACE_ROOT: context.workspaceRoot,
+      WORKSPACE_ROOT: context.workspaceRoot,
       // Provide git identity via env so agents can commit without running
       // `git config` or `git init`. These are the standard git env vars.
       GIT_AUTHOR_NAME: "Auto-Dev Agent",
@@ -77,15 +80,24 @@ export class ClaudeCodeAdapter implements AgentInvoker {
       // Also expose the auto-dev CLI on PATH so agents can call it.
       ...(context.containerId
         ? {
-            AUTO_DEV_DECISION_HOST:
-              context.decisionHost ?? "host.docker.internal",
-            AUTO_DEV_DECISION_PORT: String(context.decisionPort ?? 3000),
-            PATH: "/var/run/auto-dev:/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-          }
+          AUTO_DEV_DECISION_HOST:
+            context.decisionHost ?? "host.docker.internal",
+          AUTO_DEV_DECISION_PORT: String(context.decisionPort ?? 3000),
+          PATH: "/var/run/auto-dev:/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        }
         : {}),
       // Pass the workflow run ID so agents can call `auto-dev request-decision`.
       ...(context.workflowRunId
         ? { AUTO_DEV_RUN_ID: context.workflowRunId }
+        : {}),
+      ...(context.decisionToken
+        ? { AUTO_DEV_DECISION_TOKEN: context.decisionToken }
+        : {}),
+      ...(permissionMode
+        ? {
+          AUTO_DEV_PERMISSION_MODE: permissionMode,
+          CLAUDE_CODE_PERMISSION_MODE: permissionMode,
+        }
         : {}),
     };
 

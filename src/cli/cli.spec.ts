@@ -33,6 +33,7 @@ describe("CLI", () => {
         expect(err.stderr).toContain("status");
         expect(err.stderr).toContain("list");
         expect(err.stderr).toContain("config");
+        expect(err.stderr).toContain("request-decision");
         expect(err.stderr).toContain("request-decisions");
         expect(err.stderr).toContain("resolve-decision");
       }

@@ -59,6 +59,10 @@ export const parseFrontmatter = (content: string): FrontmatterConfig | null => {
         typeof obj["permission-mode"] === "string"
           ? validatePermissionMode(obj["permission-mode"])
           : null,
+      baseBranch:
+        typeof obj["base-branch"] === "string" && obj["base-branch"].trim()
+          ? obj["base-branch"].trim()
+          : null,
     };
   }
 
@@ -74,9 +78,11 @@ export const parseFrontmatter = (content: string): FrontmatterConfig | null => {
   const effort = headerMatch("Effort") ?? headerMatch("effort");
   const maxTurnsStr =
     headerMatch("Max[- ]?Turns") ?? headerMatch("max[- ]?turns");
+  const baseBranch =
+    headerMatch("Base[- ]?Branch") ?? headerMatch("base[- ]?branch");
   const maxTurns = maxTurnsStr ? parseInt(maxTurnsStr, 10) : null;
 
-  if (!agent && !model && !effort && !maxTurns) return null;
+  if (!agent && !model && !effort && !maxTurns && !baseBranch) return null;
 
   return {
     model,
@@ -85,6 +91,7 @@ export const parseFrontmatter = (content: string): FrontmatterConfig | null => {
     maxDecisions: null,
     maxTurns: typeof maxTurns === "number" && maxTurns > 0 ? maxTurns : null,
     permissionMode: null,
+    baseBranch: baseBranch ?? null,
   };
 };
 

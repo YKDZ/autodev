@@ -14,7 +14,7 @@ export const runReportPhase = async (args: string[]): Promise<void> => {
     },
   });
 
-  const workspaceRoot = process.env.MOON_WORKSPACE_ROOT ?? process.cwd();
+  const workspaceRoot = process.env.WORKSPACE_ROOT ?? process.cwd();
   const runId = values["run-id"] ?? "";
   const phase = values.phase ?? "";
 

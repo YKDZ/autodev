@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { getAuthEnv } from "@/shared/github-app-auth.js";
@@ -56,15 +56,17 @@ export class GitManager {
   }
 
   async ensureRepo(): Promise<void> {
+    const token = getAuthEnv().GITHUB_TOKEN;
+    const authedUrl = `https://x-access-token:${token}@github.com/${this.repoFullName}.git`;
     if (!existsSync(resolve(this.workspaceRoot, ".git"))) {
       logger.info("[auto-dev] Cloning repository...");
-      const token = getAuthEnv().GITHUB_TOKEN;
-      const url = `https://x-access-token:${token}@github.com/${this.repoFullName}.git`;
-      execFileSync("git", ["clone", url, this.workspaceRoot, "--depth=1"], {
+      execFileSync("git", ["clone", authedUrl, this.workspaceRoot, "--depth=1"], {
         stdio: "pipe",
       });
     } else {
       logger.info("[auto-dev] Fetching origin/main...");
+      // Always update remote URL with current token (token rotates each hour)
+      git(["remote", "set-url", "origin", authedUrl], this.workspaceRoot);
       await this.fetchWithRetry();
     }
     // Configure git identity
@@ -73,6 +75,17 @@ export class GitManager {
       this.workspaceRoot,
     );
     git(["config", "user.name", "Auto-Dev Bot"], this.workspaceRoot);
+
+    // Disable git-lfs and other client-side hooks for orchestrator operations.
+    // The orchestrator container does not have git-lfs installed; hooks would
+    // abort worktree add / push commands with an error.
+    const emptyHooksDir = resolve(this.workspaceRoot, ".git", "no-hooks");
+    try {
+      mkdirSync(emptyHooksDir, { recursive: true });
+      git(["config", "core.hooksPath", emptyHooksDir], this.workspaceRoot);
+    } catch {
+      /* best-effort */
+    }
   }
 
   getRepoRoot(): string {
@@ -80,19 +93,23 @@ export class GitManager {
   }
 
   private async fetchWithRetry(): Promise<void> {
+    return this.fetchBranchWithRetry("main");
+  }
+
+  private async fetchBranchWithRetry(branch: string): Promise<void> {
     const delaysMs = [1_000, 2_000, 4_000];
     let lastError: Error | null = null;
 
     for (let i = 0; i <= delaysMs.length; i += 1) {
       try {
-        git(["fetch", "origin", "main"], this.workspaceRoot);
-        git(["rev-parse", "--verify", "origin/main"], this.workspaceRoot);
+        gitWithAuth(["fetch", "origin", branch], this.workspaceRoot);
+        git(["rev-parse", "--verify", `origin/${branch}`], this.workspaceRoot);
         return;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
         if (i < delaysMs.length) {
           logger.warn(
-            `[auto-dev] git fetch origin main failed (attempt ${i + 1}/3): ${lastError.message}. Retrying in ${delaysMs[i] / 1000}s...`,
+            `[auto-dev] git fetch origin/${branch} failed (attempt ${i + 1}/3): ${lastError.message}. Retrying in ${delaysMs[i] / 1000}s...`,
           );
           // oxlint-disable-next-line no-await-in-loop
           await new Promise((resolve) => setTimeout(resolve, delaysMs[i]));
@@ -100,12 +117,35 @@ export class GitManager {
       }
     }
     throw new Error(
-      `Failed to fetch origin/main after 3 retries: ${lastError?.message ?? "unknown error"}`,
+      `Failed to fetch origin/${branch} after 3 retries: ${lastError?.message ?? "unknown error"}`,
     );
+  }
+
+  private remoteBranchExists(branch: string): boolean {
+    const output = gitWithAuth(
+      ["ls-remote", "--heads", "origin", branch],
+      this.workspaceRoot,
+    );
+    return output.trim().length > 0;
+  }
+
+  private getRemoteHead(branch: string): string | null {
+    try {
+      gitWithAuth(["fetch", "origin", branch], this.workspaceRoot);
+    } catch {
+      return null;
+    }
+
+    try {
+      return git(["rev-parse", `origin/${branch}`], this.workspaceRoot);
+    } catch {
+      return null;
+    }
   }
 
   async createBranch(
     issueNumber: number,
+    baseBranch = "main",
   ): Promise<{ branch: string; worktreePath: string }> {
     const branch = `auto-dev/issue-${issueNumber}`;
     const worktreePath = resolve(
@@ -114,21 +154,21 @@ export class GitManager {
       `issue-${issueNumber}`,
     );
 
-    await this.fetchWithRetry();
+    await this.fetchBranchWithRetry(baseBranch);
 
-    // Delete local branch if it exists (from a previous failed run)
+    // Recreate local branch to track existing remote branch when present,
+    // otherwise create from configured base branch.
     try {
       git(["branch", "-D", branch], this.workspaceRoot);
     } catch {
       /* branch didn't exist */
     }
-    // Delete remote branch
-    try {
-      gitWithAuth(["push", "origin", "--delete", branch], this.workspaceRoot);
-    } catch {
-      /* remote branch didn't exist */
+
+    if (this.remoteBranchExists(branch)) {
+      git(["branch", branch, `origin/${branch}`], this.workspaceRoot);
+    } else {
+      git(["branch", branch, `origin/${baseBranch}`], this.workspaceRoot);
     }
-    git(["branch", branch, "origin/main"], this.workspaceRoot);
 
     // Remove stale worktree path if it exists
     try {
@@ -141,11 +181,9 @@ export class GitManager {
     // Propagate the authenticated remote URL to the worktree so that
     // git push from the worktree (e.g. by the agent) uses the correct auth.
     try {
-      const remoteUrl = git(
-        ["remote", "get-url", "origin"],
-        this.workspaceRoot,
-      );
-      git(["remote", "set-url", "origin", remoteUrl], worktreePath);
+      const token = getAuthEnv().GITHUB_TOKEN;
+      const authedUrl = `https://x-access-token:${token}@github.com/${this.repoFullName}.git`;
+      git(["remote", "set-url", "origin", authedUrl], worktreePath);
     } catch {
       /* worktree inherits from parent; best-effort */
     }
@@ -237,7 +275,7 @@ export class GitManager {
     branch: string,
     message: string,
     cwd?: string,
-  ): Promise<void> {
+  ): Promise<{ pushedSha: string | null; observedRemoteSha: string | null }> {
     const dir = cwd ?? this.workspaceRoot;
     git(["add", "-A"], dir);
     try {
@@ -245,18 +283,37 @@ export class GitManager {
     } catch {
       /* nothing to commit */
     }
-    // Retry push with backoff for transient network failures.
-    // Use --force to handle cases where the remote branch already exists.
+    // Refresh remote URL with current token before pushing (token rotates hourly)
+    try {
+      const token = getAuthEnv().GITHUB_TOKEN;
+      const authedUrl = `https://x-access-token:${token}@github.com/${this.repoFullName}.git`;
+      git(["remote", "set-url", "origin", authedUrl], dir);
+    } catch {
+      /* best-effort: may fail if dir has no remote */
+    }
+    // Retry push with backoff for transient network failures, protecting
+    // against accidental overwrite by using --force-with-lease.
     const delaysMs = [5_000, 10_000, 20_000];
     for (let i = 0; i <= delaysMs.length; i += 1) {
       try {
-        gitWithAuth(["push", "--force", "-u", "origin", branch], dir, {
+        const observedRemoteSha = this.getRemoteHead(branch);
+        const pushArgs = observedRemoteSha
+          ? [
+            "push",
+            "--no-verify",
+            `--force-with-lease=refs/heads/${branch}:${observedRemoteSha}`,
+            "-u",
+            "origin",
+            `${branch}:${branch}`,
+          ]
+          : ["push", "--no-verify", "-u", "origin", `${branch}:${branch}`];
+
+        gitWithAuth(pushArgs, dir, {
           GIT_HTTP_LOW_SPEED_TIME: "20",
           GIT_HTTP_LOW_SPEED_LIMIT: "1000",
-          // Skip git-lfs pre-push hook if git-lfs is not installed in the container
-          GIT_LFS_SKIP_PUSH: "1",
         });
-        return;
+        const pushedSha = git(["rev-parse", "HEAD"], dir);
+        return { pushedSha, observedRemoteSha };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (i < delaysMs.length) {
@@ -272,6 +329,8 @@ export class GitManager {
         }
       }
     }
+
+    return { pushedSha: null, observedRemoteSha: null };
   }
 
   async tryPush(
@@ -282,10 +341,18 @@ export class GitManager {
     const delaysMs = [5_000, 10_000, 20_000, 40_000, 80_000];
     for (let i = 0; i < Math.min(maxAttempts, delaysMs.length); i += 1) {
       try {
-        gitWithAuth(
-          ["push", "--force", "origin", `${branch}:${branch}`],
-          worktreePath,
-        );
+        const observedRemoteSha = this.getRemoteHead(branch);
+        const pushArgs = observedRemoteSha
+          ? [
+            "push",
+            "--no-verify",
+            `--force-with-lease=refs/heads/${branch}:${observedRemoteSha}`,
+            "origin",
+            `${branch}:${branch}`,
+          ]
+          : ["push", "--no-verify", "origin", `${branch}:${branch}`];
+
+        gitWithAuth(pushArgs, worktreePath);
         return true;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -310,7 +377,7 @@ export class GitManager {
     if (mergeBase !== mainHead) {
       throw new Error(
         `Branch ${branch} was NOT created from current origin/main.\n` +
-          `  merge-base: ${mergeBase.slice(0, 8)}\n  origin/main: ${mainHead.slice(0, 8)}`,
+        `  merge-base: ${mergeBase.slice(0, 8)}\n  origin/main: ${mainHead.slice(0, 8)}`,
       );
     }
     return { branch, mergeBase };

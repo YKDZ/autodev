@@ -15,6 +15,22 @@ export class DecisionNotFoundError extends Error {
   }
 }
 
+export class InvalidDecisionChoiceError extends Error {
+  public readonly decisionId: string;
+  public readonly choice: string;
+  public readonly allowedChoices: string[];
+
+  constructor(decisionId: string, choice: string, allowedChoices: string[]) {
+    super(
+      `Invalid choice "${choice}" for decision ${decisionId}. Allowed: ${allowedChoices.join(", ")}`,
+    );
+    this.name = "InvalidDecisionChoiceError";
+    this.decisionId = decisionId;
+    this.choice = choice;
+    this.allowedChoices = allowedChoices;
+  }
+}
+
 export class SocketError extends Error {
   constructor(message: string) {
     super(message);

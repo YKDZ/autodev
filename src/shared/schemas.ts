@@ -50,6 +50,23 @@ export const DecisionRequestSchema = z.object({
 export const WorkflowRunSchema = z.object({
   id: z.string(),
   issueNumber: z.int(),
+  issueTitle: z
+    .string()
+    .optional()
+    .transform((v) => v ?? ""),
+  issueBody: z
+    .string()
+    .optional()
+    .transform((v) => v ?? ""),
+  issueLabels: z
+    .array(z.string())
+    .optional()
+    .transform((v) => v ?? []),
+  issueAuthor: z
+    .string()
+    .nullable()
+    .optional()
+    .transform((v) => v ?? null),
   repoFullName: z.string(),
   status: z.enum([
     "pending",
@@ -58,6 +75,10 @@ export const WorkflowRunSchema = z.object({
     "waiting_decision",
     "waiting_human",
     "blocked",
+    "cancelled",
+    "stale",
+    "abandoned",
+    "cleaned",
     "completed",
     "failed",
   ]),
@@ -65,10 +86,41 @@ export const WorkflowRunSchema = z.object({
   agentModel: z.string().nullable(),
   agentEffort: z.enum(["xhigh", "high", "medium", "low", "max"]).nullable(),
   agentDefinition: z.string().nullable(),
+  maxTurns: z
+    .int()
+    .positive()
+    .nullable()
+    .optional()
+    .transform((v) => v ?? null),
+  maxDecisions: z
+    .int()
+    .positive()
+    .nullable()
+    .optional()
+    .transform((v) => v ?? null),
+  permissionMode: z
+    .string()
+    .nullable()
+    .optional()
+    .transform((v) => v ?? null),
+  baseBranch: z
+    .string()
+    .optional()
+    .transform((v) => v ?? "main"),
   startedAt: z.string(),
   updatedAt: z.string(),
   decisionCount: z.number(),
   pendingDecisionIds: z.array(z.string()),
+  lastPushedSha: z
+    .string()
+    .nullable()
+    .optional()
+    .transform((v) => v ?? null),
+  lastObservedRemoteSha: z
+    .string()
+    .nullable()
+    .optional()
+    .transform((v) => v ?? null),
   // Fields added later may be absent in older state files
   prNumber: z
     .int()

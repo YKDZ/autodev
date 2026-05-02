@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
 
 import { logger } from "@/shared/logger.js";
@@ -16,7 +16,10 @@ export const generateSSHConfig = (): void => {
   }
 
   if (password) {
-    execSync(`echo "root:${password}" | chpasswd`);
+    execFileSync("chpasswd", {
+      input: `root:${password}\n`,
+      stdio: ["pipe", "ignore", "pipe"],
+    });
     logger.info("[auto-dev] SSH password authentication enabled");
   }
 

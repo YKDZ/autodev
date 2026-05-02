@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 
+import { createPRWithDraft, getPRStatus } from "@/shared/gh-cli.js";
 import { getAuthEnv } from "@/shared/github-app-auth.js";
 
 export class PRManager {
@@ -16,30 +17,14 @@ export class PRManager {
     base = "main",
     draft = false,
   ): { number: number; url: string } {
-    const args = [
-      "pr",
-      "create",
-      "--repo",
+    return createPRWithDraft(
       this.repoFullName,
-      "--base",
-      base,
-      "--head",
-      branch,
-      "--title",
       title,
-      "--body",
       body,
-    ];
-    if (draft) args.push("--draft");
-    const output = execFileSync("gh", args, {
-      encoding: "utf-8",
-      env: { ...process.env, ...getAuthEnv() },
-    }).trim();
-    const match = output.match(/\/pull\/(\d+)/);
-    if (!match) {
-      throw new Error(`Failed to parse PR number from gh output: ${output}`);
-    }
-    return { number: parseInt(match[1], 10), url: output };
+      branch,
+      base,
+      draft,
+    );
   }
 
   close(prNumber: number, deleteBranch = false): void {
@@ -52,22 +37,7 @@ export class PRManager {
   }
 
   getStatus(prNumber: number): string {
-    return execFileSync(
-      "gh",
-      [
-        "pr",
-        "view",
-        String(prNumber),
-        "--repo",
-        this.repoFullName,
-        "--json",
-        "state,mergeable,reviews",
-      ],
-      {
-        encoding: "utf-8",
-        env: { ...process.env, ...getAuthEnv() },
-      },
-    ).trim();
+    return getPRStatus(this.repoFullName, prNumber);
   }
 
   enableAutoMerge(prNumber: number): void {

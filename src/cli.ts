@@ -13,8 +13,8 @@ import {
 } from "./cli/pr-review.js";
 import { runPublishSummary } from "./cli/publish-summary.js";
 import { runReportPhase } from "./cli/report-phase.js";
+import { runRequestDecision } from "./cli/request-decision.js";
 import { runRequestDecisions } from "./cli/request-decisions.js";
-import { runRequestValidation } from "./cli/request-validation.js";
 import { runResolveDecision } from "./cli/resolve-decision.js";
 import { runStart } from "./cli/start.js";
 import { runStatus } from "./cli/status.js";
@@ -27,9 +27,9 @@ const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   status: runStatus,
   "ci-status": runCIStatus,
   "help-request": runHelpRequest,
+  "request-decision": runRequestDecision,
   "request-decisions": runRequestDecisions,
   "resolve-decision": runResolveDecision,
-  "request-validation": runRequestValidation,
   "report-phase": runReportPhase,
   "publish-summary": runPublishSummary,
   audit: runAudit,

@@ -18,7 +18,15 @@ export class IssueWatcher {
     workspaceRoot: string,
   ): PollResult[] {
     const activeRuns = listWorkflowRuns(workspaceRoot).filter(
-      (r) => !["completed", "failed"].includes(r.status),
+      (r) =>
+        ![
+          "completed",
+          "failed",
+          "cancelled",
+          "abandoned",
+          "cleaned",
+          "stale",
+        ].includes(r.status),
     );
     const claimedIssueNumbers = new Set(activeRuns.map((r) => r.issueNumber));
 
@@ -55,14 +63,22 @@ export class IssueWatcher {
           ? bodyFm.agent
           : config.defaultAgent;
 
+      const resolvedModel =
+        bodyFm?.model ?? config.agents[agentDefinition]?.defaultModel ?? null;
+
       results.push({
         issueNumber: issue.number,
         title: issue.title,
         body: issue.body,
+        labels: labelNames,
+        author: issue.author?.login ?? null,
         agentDefinition,
-        agentModel: bodyFm?.model ?? null,
+        agentModel: resolvedModel,
         agentEffort: bodyFm?.effort ?? null,
+        maxDecisions: bodyFm?.maxDecisions ?? null,
         maxTurns: bodyFm?.maxTurns ?? null,
+        permissionMode: bodyFm?.permissionMode ?? null,
+        baseBranch: bodyFm?.baseBranch ?? "main",
       });
     }
 
