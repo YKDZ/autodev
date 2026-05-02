@@ -231,4 +231,83 @@ describe("DecisionSocketServer", () => {
     await server.start();
     await expect(server.stop()).resolves.toBeUndefined();
   });
+
+  it("supports getResolution polling command", async () => {
+    const requestId = randomUUID();
+    const pollPort = await getFreePort();
+    const pollServer = new DecisionSocketServer({
+      port: pollPort,
+      config: DEFAULT_CONFIG,
+      workspaceRoot: tmpDir,
+      onDecisionRequest: noopAccept,
+      onGetResolution: vi.fn().mockResolvedValue({
+        decisionId: requestId,
+        title: "T",
+        resolution: "a",
+        resolvedBy: "human",
+        resolvedAt: new Date().toISOString(),
+        remainingDecisions: 5,
+      }),
+    });
+
+    await pollServer.start();
+
+    const result = await new Promise<string>((resolvePromise, reject) => {
+      const socket = createConnection(pollPort, "127.0.0.1", () => {
+        socket.write(JSON.stringify({ getResolution: requestId }) + "\n");
+      });
+
+      socket.on("data", (data: Buffer) => {
+        resolvePromise(data.toString("utf-8").trim());
+        socket.end();
+      });
+
+      socket.on("error", reject);
+    });
+
+    const parsed = z
+      .object({
+        resolved: z.boolean(),
+        response: z.object({
+          decisionId: z.string(),
+          resolution: z.string(),
+        }),
+      })
+      .parse(JSON.parse(result));
+    expect(parsed.resolved).toBe(true);
+    expect(parsed.response.decisionId).toBe(requestId);
+    expect(parsed.response.resolution).toBe("a");
+
+    await pollServer.stop();
+  });
+
+  it("rejects requests with missing token when decisionToken is configured", async () => {
+    const authPort = await getFreePort();
+    const authServer = new DecisionSocketServer({
+      port: authPort,
+      config: DEFAULT_CONFIG,
+      workspaceRoot: tmpDir,
+      decisionToken: "secret-token",
+      onDecisionRequest: noopAccept,
+      onGetResolution: noopGetResolution,
+    });
+    await authServer.start();
+
+    const request = makeRequest();
+    const result = await new Promise<string>((resolvePromise, reject) => {
+      const socket = createConnection(authPort, "127.0.0.1", () => {
+        socket.write(JSON.stringify(request) + "\n");
+      });
+      socket.on("data", (data: Buffer) => {
+        resolvePromise(data.toString("utf-8").trim());
+        socket.end();
+      });
+      socket.on("error", reject);
+    });
+
+    const parsed = z.object({ error: z.string() }).parse(JSON.parse(result));
+    expect(parsed.error).toBe("Unauthorized decision request");
+
+    await authServer.stop();
+  });
 });

@@ -26,6 +26,7 @@ body here`;
       maxDecisions: 5,
       maxTurns: 100,
       permissionMode: "plan",
+      baseBranch: null,
     });
   });
 
@@ -103,6 +104,13 @@ body here`;
     const result = parseFrontmatter(content);
     expect(result).not.toBeNull();
     expect(result!.maxTurns).toBeNull();
+  });
+
+  it("parses base-branch", () => {
+    const content = "---\nbase-branch: release/v1\n---\n";
+    const result = parseFrontmatter(content);
+    expect(result).not.toBeNull();
+    expect(result!.baseBranch).toBe("release/v1");
   });
 });
 

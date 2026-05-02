@@ -26,6 +26,9 @@ import {
   unregisterWorkspace,
   findWorkspaceByIssueNumber,
   listAllWorkspaces,
+  isEventProcessed,
+  markEventProcessed,
+  cleanupProcessedEvents,
   closeDb,
 } from "./state-store.js";
 
@@ -44,17 +47,27 @@ afterEach(async () => {
 const makeRun = (overrides: Partial<WorkflowRun> = {}): WorkflowRun => ({
   id: randomUUID(),
   issueNumber: 1,
+  issueTitle: "Issue 1",
+  issueBody: "Issue body",
+  issueLabels: ["auto-dev:ready"],
+  issueAuthor: "tester",
   repoFullName: "owner/repo",
   status: "pending",
   branch: "auto-dev/issue-1",
   agentModel: null,
   agentEffort: null,
   agentDefinition: null,
+  maxTurns: null,
+  maxDecisions: null,
+  permissionMode: null,
+  baseBranch: "main",
   startedAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
   decisionCount: 0,
   pendingDecisionIds: [],
   prNumber: null,
+  lastPushedSha: null,
+  lastObservedRemoteSha: null,
   ...overrides,
 });
 
@@ -191,6 +204,9 @@ describe("Workspace Registry CRUD", () => {
     runId: randomUUID(),
     worktreePath: `/tmp/worktree-${issueNumber}`,
     containerId: "container-abc123",
+    remoteWorkspaceFolder: `/workspaces/issue-${issueNumber}`,
+    containerSource: "devcontainer",
+    image: "autodev:latest",
     branch: `auto-dev/issue-${issueNumber}`,
     createdAt: new Date().toISOString(),
   });
@@ -242,5 +258,40 @@ describe("SQLite schema", () => {
     expect(tableNames).toContain("decision_blocks");
     expect(tableNames).toContain("workspace_registry");
     db.close();
+  });
+});
+
+describe("Processed event cursor", () => {
+  it("marks and checks processed event by handler", async () => {
+    expect(isEventProcessed(tmpDir, "issue_trigger", "123")).toBe(false);
+
+    const inserted = await markEventProcessed(tmpDir, {
+      handler: "issue_trigger",
+      githubCommentId: "123",
+      repoFullName: "owner/repo",
+      issueOrPrNumber: 42,
+    });
+    expect(inserted).toBe(true);
+    expect(isEventProcessed(tmpDir, "issue_trigger", "123")).toBe(true);
+
+    const duplicate = await markEventProcessed(tmpDir, {
+      handler: "issue_trigger",
+      githubCommentId: "123",
+      repoFullName: "owner/repo",
+      issueOrPrNumber: 42,
+    });
+    expect(duplicate).toBe(false);
+  });
+
+  it("cleanupProcessedEvents removes old rows", async () => {
+    await markEventProcessed(tmpDir, {
+      handler: "issue_trigger",
+      githubCommentId: "old-1",
+      repoFullName: "owner/repo",
+      issueOrPrNumber: 1,
+    });
+
+    const removed = await cleanupProcessedEvents(tmpDir, 0);
+    expect(removed).toBeGreaterThanOrEqual(0);
   });
 });

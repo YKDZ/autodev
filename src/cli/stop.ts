@@ -1,7 +1,8 @@
 import { logger } from "@/shared/logger.js";
 
 export const runStop = async (_args: string[]): Promise<void> => {
-  logger.out(
-    JSON.stringify({ message: "Coordinator stop not yet implemented" }),
+  logger.error(
+    JSON.stringify({ error: "stop command is currently unavailable" }),
   );
+  process.exit(1);
 };

@@ -9,7 +9,7 @@ export const runStart = async (args: string[]): Promise<void> => {
     },
   });
 
-  const workspaceRoot = process.env.MOON_WORKSPACE_ROOT ?? process.cwd();
+  const workspaceRoot = process.env.WORKSPACE_ROOT ?? process.cwd();
   const repoFullName =
     values.repo ?? process.env.GITHUB_REPOSITORY ?? "owner/repo";
 

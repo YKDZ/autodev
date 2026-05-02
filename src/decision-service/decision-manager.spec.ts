@@ -7,7 +7,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 import type { WorkflowRun, DecisionRequest } from "@/shared/types.js";
 
-import { DecisionNotFoundError } from "@/shared/errors.js";
+import {
+  DecisionNotFoundError,
+  InvalidDecisionChoiceError,
+} from "@/shared/errors.js";
 import {
   ensureStateDirs,
   saveWorkflowRun,
@@ -34,17 +37,27 @@ afterEach(async () => {
 const makeRun = (overrides: Partial<WorkflowRun> = {}): WorkflowRun => ({
   id: randomUUID(),
   issueNumber: 1,
+  issueTitle: "Issue 1",
+  issueBody: "Issue body",
+  issueLabels: ["auto-dev:ready"],
+  issueAuthor: "tester",
   repoFullName: "owner/repo",
   status: "pending",
   branch: "auto-dev/issue-1",
   agentModel: null,
   agentEffort: null,
   agentDefinition: null,
+  maxTurns: null,
+  maxDecisions: null,
+  permissionMode: null,
+  baseBranch: "main",
   startedAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
   decisionCount: 0,
   pendingDecisionIds: [],
   prNumber: null,
+  lastPushedSha: null,
+  lastObservedRemoteSha: null,
   ...overrides,
 });
 
@@ -124,6 +137,21 @@ describe("DecisionManager", () => {
       const request = makeRequest({ workflowRunId: "nonexistent-run" });
       const result = await manager.receiveRequest(request);
       expect(result.accepted).toBe(false);
+    });
+
+    it("enforces run-level maxDecisions override", async () => {
+      const run = makeRun({ maxDecisions: 1 });
+      await saveWorkflowRun(tmpDir, run);
+
+      const first = await manager.receiveRequest(
+        makeRequest({ workflowRunId: run.id }),
+      );
+      const second = await manager.receiveRequest(
+        makeRequest({ workflowRunId: run.id }),
+      );
+
+      expect(first.accepted).toBe(true);
+      expect(second.accepted).toBe(false);
     });
   });
 
@@ -207,6 +235,28 @@ describe("DecisionManager", () => {
       expect(response2.resolution).toBe("a");
       expect(response1.decisionId).toBe(response2.decisionId);
     });
+
+    it("rejects invalid choice and keeps decision pending", async () => {
+      const run = makeRun();
+      await saveWorkflowRun(tmpDir, run);
+
+      const request = makeRequest({
+        workflowRunId: run.id,
+        options: [
+          { key: "a", label: "Option A", description: "A" },
+          { key: "b", label: "Option B", description: "B" },
+        ],
+      });
+      await manager.receiveRequest(request);
+
+      await expect(
+        manager.resolve(request.id, "invalid", "human", "cli"),
+      ).rejects.toThrow(InvalidDecisionChoiceError);
+
+      const decision = loadDecision(tmpDir, request.id);
+      expect(decision!.status).toBe("pending");
+      expect(decision!.resolution).toBeNull();
+    });
   });
 
   describe("listAll", () => {
@@ -224,7 +274,7 @@ describe("DecisionManager", () => {
       expect(allDecisions).toHaveLength(3);
 
       await manager.resolve(allDecisions[0].id, "a", "human", "cli");
-      await manager.resolve(allDecisions[1].id, "b", "human", "cli");
+      await manager.resolve(allDecisions[1].id, "a", "human", "cli");
 
       const afterResolve = manager.listAll();
       const resolved = afterResolve.filter((d) => d.status === "resolved");

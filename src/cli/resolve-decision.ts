@@ -25,7 +25,7 @@ export const runResolveDecision = async (args: string[]): Promise<void> => {
     process.exit(1);
   }
 
-  const workspaceRoot = process.env.MOON_WORKSPACE_ROOT ?? process.cwd();
+  const workspaceRoot = process.env.WORKSPACE_ROOT ?? process.cwd();
   await ensureStateDirs(workspaceRoot);
   const config = await loadConfig(workspaceRoot);
   const manager = new DecisionManager(workspaceRoot, config);

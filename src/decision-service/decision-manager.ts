@@ -5,13 +5,17 @@ import type {
   DecisionResponse,
 } from "@/shared/types.js";
 
-import { DecisionNotFoundError } from "@/shared/errors.js";
+import {
+  DecisionNotFoundError,
+  InvalidDecisionChoiceError,
+} from "@/shared/errors.js";
 import {
   saveDecision,
   loadDecision,
   listDecisions,
   saveWorkflowRun,
   loadWorkflowRun,
+  withTransaction,
 } from "@/state-store/index.js";
 
 export class DecisionManager {
@@ -21,6 +25,10 @@ export class DecisionManager {
   constructor(workspaceRoot: string, config: AutoDevConfig) {
     this.workspaceRoot = workspaceRoot;
     this.config = config;
+  }
+
+  private resolveDecisionLimit(run: { maxDecisions: number | null }): number {
+    return run.maxDecisions ?? this.config.maxDecisionPerRun;
   }
 
   async receiveRequest(request: DecisionRequest): Promise<{
@@ -33,11 +41,13 @@ export class DecisionManager {
       return { accepted: false, remainingDecisions: 0, alias: "" };
     }
 
-    if (run.decisionCount >= this.config.maxDecisionPerRun) {
+    const decisionLimit = this.resolveDecisionLimit(run);
+
+    if (run.decisionCount >= decisionLimit) {
       return { accepted: false, remainingDecisions: 0, alias: "" };
     }
 
-    const remaining = this.config.maxDecisionPerRun - run.decisionCount;
+    const remaining = decisionLimit - run.decisionCount;
     const alias = `d${run.decisionCount + 1}`;
 
     const decision: DecisionBlock = {
@@ -79,6 +89,7 @@ export class DecisionManager {
       this.workspaceRoot,
       requests[0]?.workflowRunId ?? "",
     );
+
     if (!run) {
       return requests.map((r) => ({
         accepted: false,
@@ -88,6 +99,8 @@ export class DecisionManager {
       }));
     }
 
+    const decisionLimit = this.resolveDecisionLimit(run);
+
     const results: Array<{
       accepted: boolean;
       id: string;
@@ -95,46 +108,48 @@ export class DecisionManager {
       reason?: string;
     }> = [];
 
-    for (const request of requests) {
-      if (run.decisionCount >= this.config.maxDecisionPerRun) {
-        results.push({
-          accepted: false,
+    await withTransaction(this.workspaceRoot, async () => {
+      for (const request of requests) {
+        if (run.decisionCount >= decisionLimit) {
+          results.push({
+            accepted: false,
+            id: request.id,
+            alias: "",
+            reason: "Decision limit reached",
+          });
+          continue;
+        }
+
+        const alias = `d${run.decisionCount + 1}`;
+        const decision: DecisionBlock = {
           id: request.id,
-          alias: "",
-          reason: "Decision limit reached",
-        });
-        continue;
+          workflowRunId: request.workflowRunId,
+          title: request.title,
+          options: request.options,
+          recommendation: request.recommendation,
+          context: request.context,
+          alias,
+          status: "pending",
+          resolution: null,
+          resolvedBy: null,
+          resolutionChannel: null,
+          requestedAt: new Date().toISOString(),
+          resolvedAt: null,
+          batchId,
+          socketConnectionId: null,
+        };
+
+        // oxlint-disable-next-line no-await-in-loop
+        await saveDecision(this.workspaceRoot, decision);
+        run.decisionCount += 1;
+        run.pendingDecisionIds = [...run.pendingDecisionIds, request.id];
+        results.push({ accepted: true, id: request.id, alias });
       }
 
-      const alias = `d${run.decisionCount + 1}`;
-      const decision: DecisionBlock = {
-        id: request.id,
-        workflowRunId: request.workflowRunId,
-        title: request.title,
-        options: request.options,
-        recommendation: request.recommendation,
-        context: request.context,
-        alias,
-        status: "pending",
-        resolution: null,
-        resolvedBy: null,
-        resolutionChannel: null,
-        requestedAt: new Date().toISOString(),
-        resolvedAt: null,
-        batchId,
-        socketConnectionId: null,
-      };
-
-      // oxlint-disable-next-line no-await-in-loop
-      await saveDecision(this.workspaceRoot, decision);
-      run.decisionCount += 1;
-      run.pendingDecisionIds = [...run.pendingDecisionIds, request.id];
-      results.push({ accepted: true, id: request.id, alias });
-    }
-
-    run.status = "waiting_decision";
-    run.updatedAt = new Date().toISOString();
-    await saveWorkflowRun(this.workspaceRoot, run);
+      run.status = "waiting_decision";
+      run.updatedAt = new Date().toISOString();
+      await saveWorkflowRun(this.workspaceRoot, run);
+    });
 
     return results;
   }
@@ -152,9 +167,7 @@ export class DecisionManager {
 
     if (decision.status === "resolved") {
       const run = loadWorkflowRun(this.workspaceRoot, decision.workflowRunId);
-      const remaining = run
-        ? this.config.maxDecisionPerRun - run.decisionCount
-        : 0;
+      const remaining = run ? this.resolveDecisionLimit(run) - run.decisionCount : 0;
       return {
         decisionId: decision.id,
         title: decision.title,
@@ -163,6 +176,11 @@ export class DecisionManager {
         resolvedAt: decision.resolvedAt!,
         remainingDecisions: remaining,
       };
+    }
+
+    const allowedChoices = decision.options.map((option) => option.key);
+    if (!allowedChoices.includes(choice)) {
+      throw new InvalidDecisionChoiceError(decision.id, choice, allowedChoices);
     }
 
     const now = new Date().toISOString();
@@ -183,7 +201,7 @@ export class DecisionManager {
       run.updatedAt = now;
       await saveWorkflowRun(this.workspaceRoot, run);
 
-      const remaining = this.config.maxDecisionPerRun - run.decisionCount;
+      const remaining = this.resolveDecisionLimit(run) - run.decisionCount;
 
       return {
         decisionId: decision.id,
@@ -214,9 +232,7 @@ export class DecisionManager {
     if (!decision || decision.status !== "resolved") return null;
 
     const run = loadWorkflowRun(this.workspaceRoot, decision.workflowRunId);
-    const remaining = run
-      ? this.config.maxDecisionPerRun - run.decisionCount
-      : 0;
+    const remaining = run ? this.resolveDecisionLimit(run) - run.decisionCount : 0;
 
     return {
       decisionId: decision.id,

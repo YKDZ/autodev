@@ -27,10 +27,15 @@ const makePollResult = (issueNumber: number): PollResult => ({
   issueNumber,
   title: `Issue ${issueNumber}`,
   body: "Description",
+  labels: ["auto-dev:ready"],
+  author: "tester",
   agentDefinition: "full-pipeline",
   agentModel: null,
   agentEffort: null,
+  maxDecisions: null,
   maxTurns: null,
+  permissionMode: null,
+  baseBranch: "main",
 });
 
 describe("WorkflowManager", () => {

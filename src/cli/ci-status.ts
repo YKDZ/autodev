@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 
 import { logger } from "@/shared/logger.js";
@@ -220,12 +220,22 @@ export const runCIStatus = async (args: string[]): Promise<void> => {
 
 // Fallback: try gh run list for workflows on the PR branch when check-runs is unavailable
 export const _getWorkflowRunsForPR = (
-  prNumber: number,
+  _prNumber: number,
   repo: string,
 ): string => {
   try {
-    return execSync(
-      `gh run list --repo ${repo} --json name,status,conclusion,url --limit 20`,
+    return execFileSync(
+      "gh",
+      [
+        "run",
+        "list",
+        "--repo",
+        repo,
+        "--json",
+        "name,status,conclusion,url",
+        "--limit",
+        "20",
+      ],
       { encoding: "utf-8" },
     ).trim();
   } catch {

@@ -1,5 +1,5 @@
 /* oxlint-disable typescript-eslint/no-unsafe-type-assertion -- devcontainer CLI JSON and Docker error objects */
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { basename } from "node:path";
 
 import { logger } from "@/shared/logger.js";
@@ -22,6 +22,24 @@ export class DevcontainerManager {
   start(worktreePath: string): {
     containerId: string;
     remoteWorkspaceFolder: string;
+    containerSource: "devcontainer" | "fallback";
+    image: string | null;
+  } {
+    return this.startWithMetadata(worktreePath, {
+      runId: "unknown",
+      issueNumber: -1,
+      branch: "unknown",
+    });
+  }
+
+  startWithMetadata(
+    worktreePath: string,
+    metadata: { runId: string; issueNumber: number; branch: string },
+  ): {
+    containerId: string;
+    remoteWorkspaceFolder: string;
+    containerSource: "devcontainer" | "fallback";
+    image: string | null;
   } {
     // Default: devcontainer mounts workspace at /workspaces/<basename>
     const defaultRemoteFolder = `/workspaces/${basename(worktreePath)}`;
@@ -32,11 +50,25 @@ export class DevcontainerManager {
     const mainGitDir = `${this.workspaceRoot}/.git`;
     const gitMountArg = `type=bind,source=${mainGitDir},target=${mainGitDir}`;
 
+    const labels = [
+      `autodev-worktree=${worktreePath}`,
+      `autodev-run-id=${metadata.runId}`,
+      `autodev-issue=${metadata.issueNumber}`,
+      `autodev-branch=${metadata.branch}`,
+    ];
+
     let output: string;
     try {
       output = execFileSync(
         "devcontainer",
-        ["up", "--workspace-folder", worktreePath, "--mount", gitMountArg],
+        [
+          "up",
+          "--workspace-folder",
+          worktreePath,
+          "--mount",
+          gitMountArg,
+          ...labels.flatMap((label) => ["--id-label", label]),
+        ],
         {
           encoding: "utf-8",
           stdio: ["ignore", "pipe", "pipe"],
@@ -46,7 +78,11 @@ export class DevcontainerManager {
       logger.warn(
         `[auto-dev] Devcontainer up failed for ${worktreePath}, trying direct docker run fallback: ${String(err)}`,
       );
-      return this.startFallbackContainer(worktreePath, defaultRemoteFolder);
+      return this.startFallbackContainer(
+        worktreePath,
+        defaultRemoteFolder,
+        metadata,
+      );
     }
 
     // Parse JSON output to extract containerId and remoteWorkspaceFolder
@@ -61,7 +97,12 @@ export class DevcontainerManager {
             typeof parsed.remoteWorkspaceFolder === "string"
               ? parsed.remoteWorkspaceFolder
               : defaultRemoteFolder;
-          return { containerId: parsed.containerId, remoteWorkspaceFolder };
+          return {
+            containerId: parsed.containerId,
+            remoteWorkspaceFolder,
+            containerSource: "devcontainer",
+            image: this.inspectContainerImage(parsed.containerId),
+          };
         }
       } catch {
         // Not a JSON line, skip
@@ -69,10 +110,19 @@ export class DevcontainerManager {
       }
     }
 
-    // Fallback: try docker ps to find the most recent container for this worktree
+    // Fallback: find container by stable labels
     const dockerOutput = execFileSync(
       "docker",
-      ["ps", "--latest", "--format", "{{.ID}}"],
+      [
+        "ps",
+        "-a",
+        "--filter",
+        `label=autodev-worktree=${worktreePath}`,
+        "--filter",
+        `label=autodev-run-id=${metadata.runId}`,
+        "--format",
+        "{{.ID}}",
+      ],
       {
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "pipe"],
@@ -83,6 +133,8 @@ export class DevcontainerManager {
       return {
         containerId: dockerOutput,
         remoteWorkspaceFolder: defaultRemoteFolder,
+        containerSource: "devcontainer",
+        image: this.inspectContainerImage(dockerOutput),
       };
     }
 
@@ -103,13 +155,21 @@ export class DevcontainerManager {
   private startFallbackContainer(
     worktreePath: string,
     remoteWorkspaceFolder: string,
-  ): { containerId: string; remoteWorkspaceFolder: string } {
+    metadata: { runId: string; issueNumber: number; branch: string },
+  ): {
+    containerId: string;
+    remoteWorkspaceFolder: string;
+    containerSource: "devcontainer" | "fallback";
+    image: string | null;
+  } {
     const worktreeName = basename(worktreePath);
     const containerName = `autodev-worktree-${worktreeName}`;
 
     // Stop and remove any existing container with the same name
     try {
-      execSync(`docker rm -f ${containerName}`, { stdio: "ignore" });
+      execFileSync("docker", ["rm", "-f", containerName], {
+        stdio: ["ignore", "ignore", "ignore"],
+      });
     } catch {
       /* ignore if not found */
     }
@@ -154,6 +214,14 @@ export class DevcontainerManager {
         "--name",
         containerName,
         "--add-host=host.docker.internal:host-gateway",
+        "--label",
+        `autodev-worktree=${worktreePath}`,
+        "--label",
+        `autodev-run-id=${metadata.runId}`,
+        "--label",
+        `autodev-issue=${metadata.issueNumber}`,
+        "--label",
+        `autodev-branch=${metadata.branch}`,
         "--mount",
         `type=bind,source=${worktreePath},target=${remoteWorkspaceFolder}`,
         "--mount",
@@ -168,7 +236,24 @@ export class DevcontainerManager {
     ).trim();
 
     logger.info(`[auto-dev] Fallback container started: ${containerId}`);
-    return { containerId, remoteWorkspaceFolder };
+    return {
+      containerId,
+      remoteWorkspaceFolder,
+      containerSource: "fallback",
+      image: imageToUse,
+    };
+  }
+
+  private inspectContainerImage(containerId: string): string | null {
+    try {
+      return execFileSync(
+        "docker",
+        ["inspect", containerId, "--format", "{{.Config.Image}}"],
+        { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+      ).trim();
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -202,17 +287,23 @@ export class DevcontainerManager {
    */
   stop(containerId: string): void {
     try {
-      execSync(`docker stop --time=30 ${containerId}`, { stdio: "ignore" });
+      execFileSync("docker", ["stop", "--time=30", containerId], {
+        stdio: ["ignore", "ignore", "ignore"],
+      });
     } catch {
       // Timeout or already stopped; force kill
       try {
-        execSync(`docker kill ${containerId}`, { stdio: "ignore" });
+        execFileSync("docker", ["kill", containerId], {
+          stdio: ["ignore", "ignore", "ignore"],
+        });
       } catch {
         /* best-effort */
       }
     }
     try {
-      execSync(`docker rm --force ${containerId}`, { stdio: "ignore" });
+      execFileSync("docker", ["rm", "--force", containerId], {
+        stdio: ["ignore", "ignore", "ignore"],
+      });
     } catch {
       /* best-effort */
     }

@@ -15,17 +15,27 @@ const BOT_MARKER = "<!-- auto-dev-bot -->";
 const makeRun = (): WorkflowRun => ({
   id: "run-abc123",
   issueNumber: 42,
+  issueTitle: "Issue 42",
+  issueBody: "Issue details",
+  issueLabels: ["auto-dev:ready"],
+  issueAuthor: "tester",
   repoFullName: "owner/repo",
   status: "running",
   branch: "auto-dev/issue-42",
   agentModel: null,
   agentEffort: null,
   agentDefinition: null,
+  maxTurns: null,
+  maxDecisions: null,
+  permissionMode: null,
+  baseBranch: "main",
   startedAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
   decisionCount: 0,
   pendingDecisionIds: [],
   prNumber: 7,
+  lastPushedSha: null,
+  lastObservedRemoteSha: null,
 });
 
 describe("comment-templates", () => {

@@ -14,5 +14,9 @@ export {
   unregisterWorkspace,
   findWorkspaceByIssueNumber,
   listAllWorkspaces,
+  isEventProcessed,
+  markEventProcessed,
+  cleanupProcessedEvents,
+  withTransaction,
   closeDb,
 } from "./state-store.js";
