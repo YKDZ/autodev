@@ -1,4 +1,4 @@
-import { BranchManager } from "../branch-manager/index.js";
+import { BranchManager } from "@/branch-manager/index.js";
 
 export interface ValidationResult {
   passed: boolean;

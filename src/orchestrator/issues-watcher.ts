@@ -1,3 +1,4 @@
+import type { AutoDevConfig } from "@/config/types.js";
 import type { PollResult } from "@/shared/types.js";
 
 import { parseFrontmatter } from "@/shared/frontmatter-parser.js";
@@ -5,8 +6,6 @@ import { getReadyLabelAdder, listIssues } from "@/shared/gh-cli.js";
 import { logger } from "@/shared/logger.js";
 import { isAllowedUser } from "@/shared/user-filter.js";
 import { listWorkflowRuns } from "@/state-store/index.js";
-
-import type { AutoDevConfig } from "../config/types.js";
 
 export class IssueWatcher {
   /**
