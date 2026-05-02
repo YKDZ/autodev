@@ -149,6 +149,7 @@ export const runRequestDecision = async (args: string[]): Promise<void> => {
             }
 
             try {
+                // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
                 const parsed = JSON.parse(line) as Record<string, unknown>;
                 if (typeof parsed.error === "string") {
                     logger.error(JSON.stringify(parsed));
@@ -157,9 +158,9 @@ export const runRequestDecision = async (args: string[]): Promise<void> => {
                 }
 
                 const output = {
-                    decisionId: String(parsed.decisionId ?? request.id),
-                    resolution: String(parsed.resolution ?? ""),
-                    resolvedBy: String(parsed.resolvedBy ?? ""),
+                    decisionId: typeof parsed.decisionId === "string" ? parsed.decisionId : request.id,
+                    resolution: typeof parsed.resolution === "string" ? parsed.resolution : "",
+                    resolvedBy: typeof parsed.resolvedBy === "string" ? parsed.resolvedBy : "",
                     remainingDecisions: Number(parsed.remainingDecisions ?? 0),
                 };
                 process.stdout.write(JSON.stringify(output) + "\n");

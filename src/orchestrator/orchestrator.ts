@@ -18,14 +18,13 @@ import {
 import {
   createComment,
   getIssue,
-  listIssueComments,
-  listPRComments,
-  listPRs,
+  listIssues,
   removeIssueLabels,
   updateIssueLabels,
   addCommentReaction,
   getIssueState,
   getPRState,
+  getReadyLabelAdder,
 } from "@/shared/gh-cli.js";
 import { logger } from "@/shared/logger.js";
 import { isAllowedUser } from "@/shared/user-filter.js";
@@ -38,9 +37,12 @@ import {
   listWorkflowRuns,
   unregisterWorkspace,
   listAllWorkspaces,
-  isEventProcessed,
-  markEventProcessed,
+  isEventProcessedV2,
+  markEventProcessedV2,
   cleanupProcessedEvents,
+  upsertReadyIssueCandidate,
+  listQueuedReadyIssueCandidates,
+  updateReadyIssueCandidateStatus,
 } from "@/state-store/index.js";
 
 import type { AutoDevConfig } from "../config/types.js";
@@ -53,7 +55,16 @@ import { DecisionManager } from "../decision-service/decision-manager.js";
 import { DecisionSocketServer } from "../decision-service/socket-server.js";
 import { PRManager } from "../pr-manager/index.js";
 import { WorkspaceManager } from "../workspace-manager/index.js";
-import { IssueWatcher } from "./issues-watcher.js";
+import {
+  EventQueue,
+  GithubWebhookHandler,
+  GithubWebhookServer,
+  resolveWebhookPort,
+  resolveWebhookPath,
+  resolveWebhookSecret,
+  resolveInsecureLocal,
+  type WebhookHandlerContext,
+} from "../webhook/index.js";
 import { WorkflowManager } from "./workflow-manager.js";
 
 /** Returns the TCP port for the decision server.
@@ -98,21 +109,14 @@ export class Orchestrator {
   private dispatcher: AgentDispatcher | null = null;
   private auditLogger: AuditLogger | null = null;
   private prManager: PRManager | null = null;
-  private issueWatcher: IssueWatcher | null = null;
-  private polling = false;
-  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private webhookServer: GithubWebhookServer | null = null;
+  private eventQueue: EventQueue | null = null;
   /** TCP decision server host/port resolved at startup. */
   private decisionHost: string = "127.0.0.1";
   private decisionPort: number = 3000;
   private decisionToken: string = "";
   /** runId -> issueNumber for active runs */
   private readonly activeRuns: Map<string, number> = new Map();
-  private commentPollTimer: ReturnType<typeof setTimeout> | null = null;
-  private prTriggerPollTimer: ReturnType<typeof setTimeout> | null = null;
-  private issueCommentPollTimer: ReturnType<typeof setTimeout> | null = null;
-  private lifecyclePollTimer: ReturnType<typeof setTimeout> | null = null;
-
-  private static readonly COMMENT_POLL_INTERVAL_MS = 15_000;
 
   constructor(workspaceRoot: string, repoFullName: string) {
     this.workspaceRoot = workspaceRoot;
@@ -137,7 +141,6 @@ export class Orchestrator {
     this.dispatcher = new AgentDispatcher();
     this.auditLogger = new AuditLogger(this.workspaceRoot);
     this.prManager = new PRManager(this.repoFullName);
-    this.issueWatcher = new IssueWatcher();
 
     this.socketServer = new DecisionSocketServer({
       port: resolveDecisionPort(),
@@ -228,12 +231,93 @@ export class Orchestrator {
     // Reconstruct activeRuns from persisted state to avoid in-memory loss across restarts
     this.rebuildActiveRuns();
 
-    this.polling = true;
-    void this.pollLoop();
-    this.startCommentPoller();
-    this.startPRTriggerPoller();
-    this.startIssueCommentPoller();
-    this.startLifecyclePoller();
+    // One-time reconcile: catch up on any events missed while stopped
+    if (process.env.AUTO_DEV_WEBHOOK_RECONCILE_ON_START !== "0") {
+      await this.startupReconcile();
+    }
+
+    // Start webhook server
+    this.eventQueue = new EventQueue();
+    const handlerCtx: WebhookHandlerContext = {
+      workspaceRoot: this.workspaceRoot,
+      repoFullName: this.repoFullName,
+      claimReadyIssue: async (
+        issueNumber,
+        issueTitle,
+        issueBody,
+        issueLabels,
+        issueAuthor,
+        senderLogin,
+      ) =>
+        this.claimReadyIssue(
+          issueNumber,
+          issueTitle,
+          issueBody,
+          issueLabels,
+          issueAuthor,
+          senderLogin,
+        ),
+      handleIssueAutodevComment: async (
+        issueNumber,
+        commentId,
+        commentBody,
+        author,
+        resourceVersion,
+      ) =>
+        this.handleIssueAutodevComment(
+          issueNumber,
+          commentId,
+          commentBody,
+          author,
+          resourceVersion,
+        ),
+      handlePRAutodevComment: async (
+        prNumber,
+        commentId,
+        commentBody,
+        author,
+        resourceVersion,
+      ) =>
+        this.handlePRAutodevComment(
+          prNumber,
+          commentId,
+          commentBody,
+          author,
+          resourceVersion,
+        ),
+      handleDecisionComment: async (
+        issueOrPrNumber,
+        commentId,
+        commentBody,
+        author,
+        channel,
+        resourceVersion,
+      ) =>
+        this.handleDecisionComment(
+          issueOrPrNumber,
+          commentId,
+          commentBody,
+          author,
+          channel,
+          resourceVersion,
+        ),
+      handleIssueClosed: async (issueNumber) =>
+        this.handleIssueClosed(issueNumber),
+      handlePRMerged: async (prNumber) => this.handlePRMerged(prNumber),
+    };
+
+    const webhookHandler = new GithubWebhookHandler(handlerCtx);
+    this.eventQueue.setWorker(async (event) => webhookHandler.handle(event));
+
+    const webhookSecret = resolveWebhookSecret();
+    this.webhookServer = new GithubWebhookServer({
+      port: resolveWebhookPort(),
+      path: resolveWebhookPath(),
+      secret: webhookSecret,
+      insecureLocal: resolveInsecureLocal(),
+      queue: this.eventQueue,
+    });
+    await this.webhookServer.start();
   }
 
   /**
@@ -367,54 +451,450 @@ export class Orchestrator {
   }
 
   async stop(): Promise<void> {
-    this.polling = false;
-    if (this.pollTimer) clearTimeout(this.pollTimer);
-    if (this.commentPollTimer) clearTimeout(this.commentPollTimer);
-    if (this.prTriggerPollTimer) clearTimeout(this.prTriggerPollTimer);
-    if (this.issueCommentPollTimer) clearTimeout(this.issueCommentPollTimer);
-    if (this.lifecyclePollTimer) clearTimeout(this.lifecyclePollTimer);
+    await this.webhookServer?.stop();
     await this.socketServer?.stop();
   }
 
-  // ── Poll loops ───────────────────────────────────────────────────────
+  // ── Startup reconcile ────────────────────────────────────────────────
 
-  private async pollLoop(): Promise<void> {
-    while (this.polling) {
+  /**
+   * One-time startup reconcile: catches up on events missed during downtime.
+   * NOT a continuous poll — runs once at startup.
+   */
+  private async startupReconcile(): Promise<void> {
+    logger.info("[auto-dev] Running startup reconcile...");
+
+    const activeStatuses = [
+      "pending",
+      "running",
+      "workspace_ready",
+      "waiting_decision",
+      "waiting_human",
+      "blocked",
+    ];
+
+    const activeRuns = listWorkflowRuns(this.workspaceRoot).filter((r) =>
+      activeStatuses.includes(r.status),
+    );
+
+    // Check lifecycle: closed issues and merged PRs
+    for (const run of activeRuns) {
       try {
         // oxlint-disable-next-line no-await-in-loop
-        const results = this.issueWatcher!.poll(
-          this.repoFullName,
-          this.config!,
-          this.workspaceRoot,
-        );
-
-        const maxConcurrent = this.config!.maxConcurrentRuns;
-        const available = maxConcurrent - this.activeRuns.size;
-        const toProcess = results.slice(0, Math.max(0, available));
-
-        if (results.length > toProcess.length) {
+        const issueState = getIssueState(this.repoFullName, run.issueNumber);
+        if (issueState !== "open") {
           logger.info(
-            `[auto-dev] ${results.length} issue(s) ready, deferring ${results.length - toProcess.length} (concurrent limit: ${maxConcurrent})`,
+            `[auto-dev] Reconcile: issue #${run.issueNumber} is closed — cleaning up`,
           );
+          // oxlint-disable-next-line no-await-in-loop
+          await this.cleanupRun(run, "cancelled");
+          continue;
+        }
+
+        if (run.prNumber) {
+          // oxlint-disable-next-line no-await-in-loop
+          const prState = getPRState(this.repoFullName, run.prNumber);
+          if (prState.state === "MERGED") {
+            logger.info(
+              `[auto-dev] Reconcile: PR #${run.prNumber} merged — cleaning up`,
+            );
+            // oxlint-disable-next-line no-await-in-loop
+            await this.cleanupRun(run, "completed");
+          }
+        }
+      } catch {
+        /* best-effort: gh call may fail for deleted issues */
+      }
+    }
+
+    // Scan for new ready issues that haven't been claimed
+    try {
+      const issues = listIssues(this.repoFullName, "auto-dev:ready");
+      const claimedIssues = new Set(
+        listWorkflowRuns(this.workspaceRoot)
+          .filter((r) => !["completed", "failed", "cancelled", "abandoned", "cleaned", "stale"].includes(r.status))
+          .map((r) => r.issueNumber),
+      );
+
+      for (const issue of issues) {
+        if (claimedIssues.has(issue.number)) continue;
+        const labelNames = issue.labels.map((l) =>
+          typeof l === "string" ? l : l.name,
+        );
+        if (labelNames.includes("human-only")) continue;
+
+        // Use label adder (not issue author) as the authorizing principal
+        // oxlint-disable-next-line no-await-in-loop
+        const labelAdder = getReadyLabelAdder(this.repoFullName, issue.number);
+        const senderLogin = labelAdder ?? "";
+        if (!senderLogin || !isAllowedUser(senderLogin)) {
+          logger.info(
+            `[auto-dev] Reconcile: skipping issue #${issue.number} — label adder "${senderLogin || "unknown"}" not authorized`,
+          );
+          continue;
+        }
+
+        // Queue as ready candidate (won't duplicate if already queued)
+        upsertReadyIssueCandidate(this.workspaceRoot, {
+          repoFullName: this.repoFullName,
+          issueNumber: issue.number,
+          senderLogin,
+          payloadJson: JSON.stringify({ source: "reconcile" }),
+        });
+      }
+
+      // Drain queued candidates
+      await this.drainReadyIssueCandidates();
+    } catch (err) {
+      logger.error(`[auto-dev] Reconcile issue scan error: ${String(err)}`);
+    }
+
+    logger.info("[auto-dev] Startup reconcile complete");
+  }
+
+  /** Drain queued ready_issue_candidates up to maxConcurrentRuns. */
+  private async drainReadyIssueCandidates(): Promise<void> {
+    const maxConcurrent = this.config!.maxConcurrentRuns;
+    const available = maxConcurrent - this.activeRuns.size;
+    if (available <= 0) return;
+
+    const candidates = listQueuedReadyIssueCandidates(
+      this.workspaceRoot,
+      this.repoFullName,
+    ).slice(0, available);
+
+    for (const candidate of candidates) {
+      try {
+        // Fetch fresh issue state before claiming
+        // oxlint-disable-next-line no-await-in-loop
+        const issue = getIssue(this.repoFullName, candidate.issueNumber);
+        const issueState = getIssueState(this.repoFullName, candidate.issueNumber);
+        if (issueState !== "open") {
+          updateReadyIssueCandidateStatus(
+            this.workspaceRoot,
+            candidate.issueNumber,
+            this.repoFullName,
+            "skipped",
+            "Issue is not open",
+          );
+          continue;
+        }
+
+        const labelNames = issue.labels.map((l) => l.name);
+        if (labelNames.includes("human-only")) {
+          updateReadyIssueCandidateStatus(
+            this.workspaceRoot,
+            candidate.issueNumber,
+            this.repoFullName,
+            "skipped",
+            "Issue has human-only label",
+          );
+          continue;
         }
 
         // oxlint-disable-next-line no-await-in-loop
-        await Promise.all(
-          toProcess.map(async (result) => this.handleNewIssue(result)),
+        await this.claimReadyIssue(
+          issue.number,
+          issue.title,
+          issue.body,
+          labelNames,
+          issue.author?.login ?? null,
+          candidate.senderLogin,
+        );
+        updateReadyIssueCandidateStatus(
+          this.workspaceRoot,
+          candidate.issueNumber,
+          this.repoFullName,
+          "claimed",
         );
       } catch (err) {
-        logger.error(`[auto-dev] Poll cycle error: ${String(err)}`);
-      }
-
-      // oxlint-disable-next-line no-await-in-loop
-      await new Promise((resolve) => {
-        this.pollTimer = setTimeout(
-          resolve,
-          this.config!.pollIntervalSec * 1000,
+        updateReadyIssueCandidateStatus(
+          this.workspaceRoot,
+          candidate.issueNumber,
+          this.repoFullName,
+          "failed",
+          String(err),
         );
-      });
+      }
     }
   }
+
+  // ── Business logic methods (called by webhook handler) ───────────────
+
+  /** Claim a ready issue: create workspace and set workspace_ready status. */
+  async claimReadyIssue(
+    issueNumber: number,
+    issueTitle: string,
+    issueBody: string,
+    issueLabels: string[],
+    issueAuthor: string | null,
+    senderLogin: string,
+  ): Promise<void> {
+    // Check user allowlist
+    if (senderLogin && !isAllowedUser(senderLogin)) {
+      logger.info(
+        `[auto-dev] claimReadyIssue: sender "${senderLogin}" is not authorized — ignoring issue #${issueNumber}`,
+      );
+      return;
+    }
+
+    // Check for existing non-terminal run for this issue
+    const existingRun = listWorkflowRuns(this.workspaceRoot).find(
+      (r) =>
+        r.issueNumber === issueNumber &&
+        !["completed", "failed", "cancelled", "abandoned", "cleaned", "stale"].includes(r.status),
+    );
+    if (existingRun) {
+      logger.info(
+        `[auto-dev] claimReadyIssue: issue #${issueNumber} already has active run ${existingRun.id} — ignoring`,
+      );
+      return;
+    }
+
+    // Respect concurrent run limit
+    const maxConcurrent = this.config!.maxConcurrentRuns;
+    if (this.activeRuns.size >= maxConcurrent) {
+      logger.info(
+        `[auto-dev] claimReadyIssue: concurrent limit (${maxConcurrent}) reached — queuing issue #${issueNumber}`,
+      );
+      upsertReadyIssueCandidate(this.workspaceRoot, {
+        repoFullName: this.repoFullName,
+        issueNumber,
+        senderLogin,
+        payloadJson: JSON.stringify({
+          issueTitle,
+          issueBody,
+          issueLabels,
+          issueAuthor,
+        }),
+      });
+      return;
+    }
+
+    const { parseFrontmatter } = await import("@/shared/frontmatter-parser.js");
+    const bodyFm = parseFrontmatter(issueBody);
+    const agentDefinition =
+      bodyFm?.agent && this.config!.agents[bodyFm.agent]
+        ? bodyFm.agent
+        : this.config!.defaultAgent;
+    const agentModel =
+      bodyFm?.model ?? this.config!.agents[agentDefinition]?.defaultModel ?? null;
+
+    const result: import("@/shared/types.js").PollResult = {
+      issueNumber,
+      title: issueTitle,
+      body: issueBody,
+      labels: issueLabels,
+      author: issueAuthor,
+      agentDefinition,
+      agentModel,
+      agentEffort: bodyFm?.effort ?? null,
+      maxDecisions: bodyFm?.maxDecisions ?? null,
+      maxTurns: bodyFm?.maxTurns ?? null,
+      permissionMode: bodyFm?.permissionMode ?? null,
+      baseBranch: bodyFm?.baseBranch ?? "main",
+    };
+
+    await this.handleNewIssue(result);
+  }
+
+  /** Handle `@autodev ...` in a workspace_ready issue comment. */
+  async handleIssueAutodevComment(
+    issueNumber: number,
+    commentId: number,
+    commentBody: string,
+    author: string,
+    resourceVersion: string,
+  ): Promise<void> {
+    if (!isAllowedUser(author)) return;
+
+    const handler = "issue_trigger";
+    const commentIdStr = String(commentId);
+    if (isEventProcessedV2(this.workspaceRoot, handler, commentIdStr, resourceVersion)) {
+      return;
+    }
+
+    const run = listWorkflowRuns(this.workspaceRoot).find(
+      (r) => r.issueNumber === issueNumber && r.status === "workspace_ready",
+    );
+    if (!run) {
+      logger.info(
+        `[auto-dev] handleIssueAutodevComment: no workspace_ready run for issue #${issueNumber}`,
+      );
+      return;
+    }
+
+    logger.info(
+      `[auto-dev] Issue #${issueNumber} @autodev trigger from @${author}`,
+    );
+
+    try {
+      addCommentReaction(this.repoFullName, commentId, "eyes");
+    } catch {
+      /* best-effort */
+    }
+
+    await this.handleIssueCommentTrigger(run, commentId, commentBody, author);
+
+    await markEventProcessedV2(this.workspaceRoot, {
+      handler,
+      githubCommentId: commentIdStr,
+      repoFullName: this.repoFullName,
+      issueOrPrNumber: issueNumber,
+      resourceVersion,
+    });
+  }
+
+  /** Handle `@autodev ...` in a PR comment (re-trigger). */
+  async handlePRAutodevComment(
+    prNumber: number,
+    commentId: number,
+    commentBody: string,
+    author: string,
+    resourceVersion: string,
+  ): Promise<void> {
+    if (!isAllowedUser(author)) return;
+    if (author === "auto-dev[bot]") return;
+
+    const handler = "pr_trigger";
+    const commentIdStr = String(commentId);
+    if (isEventProcessedV2(this.workspaceRoot, handler, commentIdStr, resourceVersion)) {
+      return;
+    }
+
+    const match = commentBody.match(/@autodev\b/i);
+    if (!match) return;
+    const instruction = commentBody.slice(match.index! + "@autodev".length).trim();
+    if (!instruction) return;
+
+    const runs = this.workflowManager!.listAll();
+    const run = runs.find((r) => r.prNumber === prNumber);
+    if (!run) {
+      logger.warn(`[auto-dev] No WorkflowRun found for PR #${prNumber}`);
+      return;
+    }
+
+    logger.info(
+      `[auto-dev] PR #${prNumber} trigger detected from @${author}: "${instruction.slice(0, 80)}"`,
+    );
+
+    await this.handlePRTrigger(run, commentBody, prNumber);
+
+    await markEventProcessedV2(this.workspaceRoot, {
+      handler,
+      githubCommentId: commentIdStr,
+      repoFullName: this.repoFullName,
+      issueOrPrNumber: prNumber,
+      resourceVersion,
+    });
+  }
+
+  /** Handle `@dN <choice>` decision resolution in issue or PR comments. */
+  async handleDecisionComment(
+    issueOrPrNumber: number,
+    commentId: number,
+    commentBody: string,
+    author: string,
+    channel: "issue_comment" | "pr_comment",
+    resourceVersion: string,
+  ): Promise<void> {
+    if (!isAllowedUser(author)) return;
+
+    const handler =
+      channel === "issue_comment"
+        ? "issue_decision_resolution"
+        : "pr_decision_resolution";
+    const commentIdStr = String(commentId);
+
+    if (isEventProcessedV2(this.workspaceRoot, handler, commentIdStr, resourceVersion)) {
+      return;
+    }
+
+    // Find active run for this issue/PR number
+    const allRuns = listWorkflowRuns(this.workspaceRoot).filter(
+      (r) =>
+        !["completed", "failed", "cancelled", "abandoned", "cleaned", "stale"].includes(r.status),
+    );
+    const run = allRuns.find(
+      (r) =>
+        (channel === "issue_comment" && r.issueNumber === issueOrPrNumber) ||
+        (channel === "pr_comment" && r.prNumber === issueOrPrNumber),
+    );
+    if (!run) return;
+
+    const matches = [...commentBody.matchAll(/@(d\d+)\s+(\S+)/gi)];
+    for (const [, rawAlias, choice] of matches) {
+      const alias = rawAlias.toLowerCase();
+      const pending = listDecisions(this.workspaceRoot).find(
+        (d) =>
+          d.workflowRunId === run.id &&
+          d.alias === alias &&
+          d.status === "pending",
+      );
+      if (pending) {
+        try {
+          // oxlint-disable-next-line no-await-in-loop
+          await this.decisionManager!.resolve(
+            pending.id,
+            choice,
+            author,
+            channel,
+          );
+          logger.info(
+            `[auto-dev] Resolved ${pending.id} (${alias}) via ${channel} by ${author} -> ${choice}`,
+          );
+        } catch (err) {
+          logger.warn(
+            `[auto-dev] Failed to resolve ${pending.id} (${alias}) via ${channel}: ${String(err)}`,
+          );
+        }
+      }
+    }
+
+    await markEventProcessedV2(this.workspaceRoot, {
+      handler,
+      githubCommentId: commentIdStr,
+      repoFullName: this.repoFullName,
+      issueOrPrNumber,
+      resourceVersion,
+    });
+  }
+
+  /** Cleanup a run whose issue was closed. */
+  async handleIssueClosed(issueNumber: number): Promise<void> {
+    const run = listWorkflowRuns(this.workspaceRoot).find(
+      (r) =>
+        r.issueNumber === issueNumber &&
+        (r.status === "workspace_ready" || r.status === "running"),
+    );
+    if (!run) return;
+
+    logger.info(
+      `[auto-dev] Issue #${issueNumber} closed — cleaning up workspace`,
+    );
+    await this.cleanupRun(run, "cancelled");
+    await this.drainReadyIssueCandidates();
+  }
+
+  /** Cleanup a run whose PR was merged. */
+  async handlePRMerged(prNumber: number): Promise<void> {
+    const run = listWorkflowRuns(this.workspaceRoot).find(
+      (r) => r.prNumber === prNumber,
+    );
+    if (!run) return;
+
+    logger.info(
+      `[auto-dev] PR #${prNumber} merged — cleaning up workspace for issue #${run.issueNumber}`,
+    );
+    await this.cleanupRun(run, "completed");
+    await this.drainReadyIssueCandidates();
+  }
+
+  // ── Poll loops (REMOVED - replaced by webhook events) ────────────────
+
+  // Note: pollLoop, startCommentPoller, startPRTriggerPoller,
+  // startIssueCommentPoller, startLifecyclePoller have been removed.
+  // Business logic is now driven by webhook events received in GithubWebhookHandler.
 
   // ── Issue lifecycle ──────────────────────────────────────────────────
 
@@ -721,6 +1201,8 @@ export class Orchestrator {
           const code = event.exitCode ?? 0;
           const finalStatus = code === 0 ? "completed" : "failed";
           this.activeRuns.delete(run.id);
+          // Release concurrency slot and allow queued candidates to start
+          void this.drainReadyIssueCandidates();
           await this.workflowManager!.updateStatus(run.id, finalStatus);
 
           if (workspaceInfo && run.branch && code === 0) {
@@ -826,6 +1308,8 @@ export class Orchestrator {
         `[auto-dev] Agent dispatch error for run ${run.id}: ${String(err)}`,
       );
       this.activeRuns.delete(run.id);
+      // Release concurrency slot and allow queued candidates to start
+      void this.drainReadyIssueCandidates();
       await this.workflowManager!.updateStatus(run.id, "failed");
       try {
         removeIssueLabels(this.repoFullName, run.issueNumber, [
@@ -1063,134 +1547,7 @@ export class Orchestrator {
     }
   }
 
-  // ── Issue comment poller (workspace_ready runs) ──────────────────────
-
-  private startIssueCommentPoller(): void {
-    const poll = async () => {
-      try {
-        const workspaceReadyRuns = listWorkflowRuns(this.workspaceRoot).filter(
-          (r) => r.status === "workspace_ready",
-        );
-
-        for (const run of workspaceReadyRuns) {
-          // oxlint-disable-next-line no-await-in-loop
-          await this.pollIssueCommentsForRun(run);
-        }
-      } catch (err) {
-        logger.error(`[auto-dev] Issue comment poller error: ${String(err)}`);
-      }
-      this.issueCommentPollTimer = setTimeout(
-        () => void poll(),
-        Orchestrator.COMMENT_POLL_INTERVAL_MS,
-      );
-    };
-    this.issueCommentPollTimer = setTimeout(
-      () => void poll(),
-      Orchestrator.COMMENT_POLL_INTERVAL_MS,
-    );
-  }
-
-  private async pollIssueCommentsForRun(run: WorkflowRun): Promise<void> {
-    try {
-      const comments = listIssueComments(this.repoFullName, run.issueNumber);
-      for (const comment of comments) {
-        if (
-          isEventProcessed(this.workspaceRoot, "issue_trigger", comment.id)
-        ) {
-          continue;
-        }
-        if (comment.body.includes("<!-- auto-dev-bot -->")) continue;
-
-        const author = comment.user?.login ?? comment.author?.login ?? "";
-        if (author && !isAllowedUser(author)) continue;
-
-        if (!/@autodev\b/i.test(comment.body)) continue;
-
-        logger.info(
-          `[auto-dev] Issue #${run.issueNumber} @autodev trigger from @${author}`,
-        );
-
-        // Only one trigger at a time per run
-        // oxlint-disable-next-line no-await-in-loop
-        await this.handleIssueCommentTrigger(
-          run,
-          parseInt(comment.id, 10),
-          comment.body,
-          author,
-        );
-        // oxlint-disable-next-line no-await-in-loop
-        await markEventProcessed(this.workspaceRoot, {
-          handler: "issue_trigger",
-          githubCommentId: comment.id,
-          repoFullName: this.repoFullName,
-          issueOrPrNumber: run.issueNumber,
-        });
-        break;
-      }
-    } catch (err) {
-      logger.error(
-        `[auto-dev] Issue comment poll error for #${run.issueNumber}: ${String(err)}`,
-      );
-    }
-  }
-
   // ── Lifecycle poller (cleanup closed issues / merged PRs) ───────────
-
-  private startLifecyclePoller(): void {
-    const LIFECYCLE_POLL_INTERVAL_MS = 60_000;
-    const poll = async () => {
-      try {
-        await this.lifecycleCheck();
-      } catch (err) {
-        logger.error(`[auto-dev] Lifecycle poller error: ${String(err)}`);
-      }
-      this.lifecyclePollTimer = setTimeout(
-        () => void poll(),
-        LIFECYCLE_POLL_INTERVAL_MS,
-      );
-    };
-    this.lifecyclePollTimer = setTimeout(
-      () => void poll(),
-      LIFECYCLE_POLL_INTERVAL_MS,
-    );
-  }
-
-  private async lifecycleCheck(): Promise<void> {
-    const runs = listWorkflowRuns(this.workspaceRoot).filter(
-      (r) => r.status === "workspace_ready" || r.status === "running",
-    );
-
-    for (const run of runs) {
-      try {
-        // Check if issue is closed
-        // oxlint-disable-next-line no-await-in-loop
-        const issueState = getIssueState(this.repoFullName, run.issueNumber);
-        if (issueState !== "OPEN") {
-          logger.info(
-            `[auto-dev] Issue #${run.issueNumber} is closed — cleaning up workspace`,
-          );
-          // oxlint-disable-next-line no-await-in-loop
-          await this.cleanupRun(run, "cancelled");
-          continue;
-        }
-
-        // Check if PR is merged
-        if (run.prNumber) {
-          // oxlint-disable-next-line no-await-in-loop
-          const prState = getPRState(this.repoFullName, run.prNumber);
-          if (prState.state === "MERGED") {
-            logger.info(
-              `[auto-dev] PR #${run.prNumber} merged — cleaning up workspace for issue #${run.issueNumber}`,
-            );
-            // oxlint-disable-next-line no-await-in-loop
-            await this.cleanupRun(run, "completed");
-          }
-        }
-      } catch {
-        /* best-effort: gh call may fail for deleted issues */
-      }
-    }
-  }
 
   private async cleanupRun(
     run: WorkflowRun,
@@ -1378,255 +1735,6 @@ export class Orchestrator {
         await unregisterWorkspace(this.workspaceRoot, run.issueNumber);
       }
     }
-  }
-
-  // ── Comment resolution ──────────────────────────────────────────────
-
-  private collectResolutionTasks(
-    comments: Array<{
-      id: string;
-      body: string;
-      user?: { login: string };
-      author?: { login: string };
-    }>,
-    runId: string,
-    handler: "issue_decision_resolution" | "pr_decision_resolution",
-  ): Array<{
-    commentId: string;
-    decisionId: string;
-    choice: string;
-    author: string;
-    alias: string;
-  }> {
-    const tasks: Array<{
-      commentId: string;
-      decisionId: string;
-      choice: string;
-      author: string;
-      alias: string;
-    }> = [];
-    for (const comment of comments) {
-      if (isEventProcessed(this.workspaceRoot, handler, comment.id)) continue;
-      if (comment.body.includes("<!-- auto-dev-bot -->")) continue;
-      const author = comment.user?.login ?? comment.author?.login ?? "";
-      if (author && !isAllowedUser(author)) continue;
-      const matches = [...comment.body.matchAll(/@(d\d+)\s+(\S+)/gi)];
-      for (const [, rawAlias, choice] of matches) {
-        const alias = rawAlias.toLowerCase();
-        const pending = listDecisions(this.workspaceRoot).find(
-          (d) =>
-            d.workflowRunId === runId &&
-            d.alias === alias &&
-            d.status === "pending",
-        );
-        if (pending) {
-          tasks.push({
-            commentId: comment.id,
-            decisionId: pending.id,
-            choice,
-            author,
-            alias,
-          });
-        }
-      }
-    }
-    return tasks;
-  }
-
-  private async processIssueComments(
-    issueNumber: number,
-    runId: string,
-  ): Promise<void> {
-    try {
-      const comments = listIssueComments(this.repoFullName, issueNumber);
-      const tasks = this.collectResolutionTasks(
-        comments,
-        runId,
-        "issue_decision_resolution",
-      );
-      const consumedCommentIds = new Set<string>();
-      await Promise.all(
-        tasks.map(async ({ commentId, decisionId, choice, author, alias }) => {
-          try {
-            await this.decisionManager!.resolve(
-              decisionId,
-              choice,
-              author,
-              "issue_comment",
-            );
-            consumedCommentIds.add(commentId);
-            logger.info(
-              `[auto-dev] Resolved ${decisionId} (${alias}) via issue comment by ${author} -> ${choice}`,
-            );
-          } catch (err) {
-            consumedCommentIds.add(commentId);
-            logger.warn(
-              `[auto-dev] Failed to resolve ${decisionId} (${alias}) via issue comment: ${String(err)}`,
-            );
-          }
-        }),
-      );
-
-      await Promise.all(
-        [...consumedCommentIds].map(async (commentId) =>
-          markEventProcessed(this.workspaceRoot, {
-            handler: "issue_decision_resolution",
-            githubCommentId: commentId,
-            repoFullName: this.repoFullName,
-            issueOrPrNumber: issueNumber,
-          }),
-        ),
-      );
-    } catch (err) {
-      logger.error(
-        `[auto-dev] Comment poll error for issue #${issueNumber}: ${String(err)}`,
-      );
-    }
-  }
-
-  private async processPRComments(
-    prNumber: number,
-    runId: string,
-  ): Promise<void> {
-    try {
-      const comments = listPRComments(this.repoFullName, prNumber);
-      const tasks = this.collectResolutionTasks(
-        comments,
-        runId,
-        "pr_decision_resolution",
-      );
-      const consumedCommentIds = new Set<string>();
-      await Promise.all(
-        tasks.map(async ({ commentId, decisionId, choice, author, alias }) => {
-          try {
-            await this.decisionManager!.resolve(
-              decisionId,
-              choice,
-              author,
-              "pr_comment",
-            );
-            consumedCommentIds.add(commentId);
-            logger.info(
-              `[auto-dev] Resolved ${decisionId} (${alias}) via PR comment by ${author} -> ${choice}`,
-            );
-          } catch (err) {
-            consumedCommentIds.add(commentId);
-            logger.warn(
-              `[auto-dev] Failed to resolve ${decisionId} (${alias}) via PR comment: ${String(err)}`,
-            );
-          }
-        }),
-      );
-
-      await Promise.all(
-        [...consumedCommentIds].map(async (commentId) =>
-          markEventProcessed(this.workspaceRoot, {
-            handler: "pr_decision_resolution",
-            githubCommentId: commentId,
-            repoFullName: this.repoFullName,
-            issueOrPrNumber: prNumber,
-          }),
-        ),
-      );
-    } catch (err) {
-      logger.error(
-        `[auto-dev] PR comment poll error for PR #${prNumber}: ${String(err)}`,
-      );
-    }
-  }
-
-  private startCommentPoller(): void {
-    const poll = async () => {
-      if (this.activeRuns.size > 0) {
-        await Promise.all(
-          [...this.activeRuns.entries()].map(async ([runId, issueNumber]) => {
-            await this.processIssueComments(issueNumber, runId);
-            const run = loadWorkflowRun(this.workspaceRoot, runId);
-            if (run?.prNumber) {
-              await this.processPRComments(run.prNumber, runId);
-            }
-          }),
-        );
-      }
-      this.commentPollTimer = setTimeout(
-        () => void poll(),
-        Orchestrator.COMMENT_POLL_INTERVAL_MS,
-      );
-    };
-    this.commentPollTimer = setTimeout(
-      () => void poll(),
-      Orchestrator.COMMENT_POLL_INTERVAL_MS,
-    );
-  }
-
-  private startPRTriggerPoller(): void {
-    const poll = async () => {
-      try {
-        const prs = listPRs(this.repoFullName, "open");
-        const autoDevPRs = prs.filter((pr) =>
-          pr.headRefName.startsWith("auto-dev/issue-"),
-        );
-
-        for (const pr of autoDevPRs) {
-          const comments = listPRComments(this.repoFullName, pr.number);
-
-          for (const comment of comments) {
-            if (
-              isEventProcessed(this.workspaceRoot, "pr_trigger", comment.id)
-            ) {
-              continue;
-            }
-
-            if (comment.body.includes("<!-- auto-dev-bot -->")) continue;
-            const author = comment.user?.login ?? comment.author?.login ?? "";
-            if (author === "auto-dev[bot]") continue;
-            if (author && !isAllowedUser(author)) continue;
-
-            const match = comment.body.match(/@autodev\b/i);
-            if (!match) continue;
-
-            const instruction = comment.body
-              .slice(match.index! + "@autodev".length)
-              .trim();
-            if (!instruction) continue;
-
-            logger.info(
-              `[auto-dev] PR #${pr.number} trigger detected from @${author}: "${instruction.slice(0, 80)}"`,
-            );
-
-            const runs = this.workflowManager!.listAll();
-            const run = runs.find((r) => r.prNumber === pr.number);
-            if (!run) {
-              logger.warn(
-                `[auto-dev] No WorkflowRun found for PR #${pr.number}`,
-              );
-              continue;
-            }
-
-            // oxlint-disable-next-line no-await-in-loop
-            await this.handlePRTrigger(run, comment.body, pr.number);
-            // oxlint-disable-next-line no-await-in-loop
-            await markEventProcessed(this.workspaceRoot, {
-              handler: "pr_trigger",
-              githubCommentId: comment.id,
-              repoFullName: this.repoFullName,
-              issueOrPrNumber: pr.number,
-            });
-            break;
-          }
-        }
-      } catch (err) {
-        logger.error(`[auto-dev] PR trigger poller error: ${String(err)}`);
-      }
-      this.prTriggerPollTimer = setTimeout(
-        () => void poll(),
-        (this.config?.pollIntervalSec ?? 30) * 1000,
-      );
-    };
-    this.prTriggerPollTimer = setTimeout(
-      () => void poll(),
-      (this.config?.pollIntervalSec ?? 30) * 1000,
-    );
   }
 
   // ── Shared helpers ──────────────────────────────────────────────────

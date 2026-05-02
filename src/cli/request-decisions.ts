@@ -28,6 +28,7 @@ const normalizeOptions = (
       }
       if (typeof option !== "object" || option === null) return null;
 
+      // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       const record = option as Record<string, unknown>;
       const key = typeof record.key === "string" ? record.key : "";
       if (!key) return null;
@@ -85,11 +86,14 @@ const queryResolution = async (
       const line = buffer.slice(0, idx).trim();
       socket.end();
       try {
+        // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
         const parsed = JSON.parse(line) as Record<string, unknown>;
         if (parsed.resolved === true && parsed.response) {
+          // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+          const response = parsed.response as Record<string, unknown>;
           resolve({
             resolved: true,
-            response: parsed.response as Record<string, unknown>,
+            response,
           });
           return;
         }
@@ -209,9 +213,9 @@ export const runRequestDecisions = async (args: string[]): Promise<void> => {
               const status = await queryResolution(host, port, decisionId, token);
               if (status.resolved) {
                 resolved.push({
-                  decisionId: String(status.response.decisionId ?? decisionId),
-                  resolution: String(status.response.resolution ?? ""),
-                  resolvedBy: String(status.response.resolvedBy ?? ""),
+                  decisionId: typeof status.response.decisionId === "string" ? status.response.decisionId : decisionId,
+                  resolution: typeof status.response.resolution === "string" ? status.response.resolution : "",
+                  resolvedBy: typeof status.response.resolvedBy === "string" ? status.response.resolvedBy : "",
                   remainingDecisions: Number(
                     status.response.remainingDecisions ?? 0,
                   ),

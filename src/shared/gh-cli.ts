@@ -325,8 +325,8 @@ export const submitPRReview = (
   gh(args);
 };
 
-/** Get the state of an issue ("open" or "closed"). */
-export const getIssueState = (repo: string, issueNumber: number): string => {
+/** Get the state of an issue. Always returns lowercase: "open" or "closed". */
+export const getIssueState = (repo: string, issueNumber: number): "open" | "closed" => {
   const output = gh([
     "issue",
     "view",
@@ -338,7 +338,7 @@ export const getIssueState = (repo: string, issueNumber: number): string => {
   ]);
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   const parsed = JSON.parse(output) as { state: string };
-  return parsed.state;
+  return parsed.state.toLowerCase() === "open" ? "open" : "closed";
 };
 
 /** Get the state and mergedAt of a PR. */
