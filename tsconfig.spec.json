@@ -4,7 +4,10 @@
     "outDir": "./out-tsc/vitest",
     "types": ["node", "vitest/globals"],
     "forceConsistentCasingInFileNames": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    },
   },
   "include": ["src/**/*.test.ts", "src/**/*.spec.ts"]
 }

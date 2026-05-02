@@ -639,6 +639,7 @@ export class Orchestrator {
     });
 
     try {
+      let stdoutBuf = "";
       for await (const event of this.dispatcher!.dispatch("claude-code", {
         issueContext,
         agentDefinition: agentDef,
@@ -655,6 +656,7 @@ export class Orchestrator {
         decisionPort: this.decisionPort,
       })) {
         if (event.type === "stdout" && event.data) {
+          stdoutBuf += event.data;
           this.auditLogger!.log({
             id: randomUUID(),
             workflowRunId: run.id,
@@ -667,6 +669,7 @@ export class Orchestrator {
             `[auto-dev] agent stderr [${run.id}]: ${event.data.slice(0, 500)}`,
           );
         } else if (event.type === "exit") {
+          this.logTokenUsage(run.id, stdoutBuf);
           const code = event.exitCode ?? 0;
           const finalStatus = code === 0 ? "completed" : "failed";
           this.activeRuns.delete(run.id);
@@ -791,6 +794,37 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * Parse a Claude Code stream-json stdout buffer and log token usage if a
+   * `result` event with `usage` data is found.
+   */
+  private logTokenUsage(workflowRunId: string, rawStdout: string): void {
+    for (const line of rawStdout.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        if (parsed.type === "result" && parsed.usage) {
+          this.auditLogger!.log({
+            id: randomUUID(),
+            workflowRunId,
+            timestamp: new Date().toISOString(),
+            type: "agent_usage",
+            payload: {
+              usage: parsed.usage,
+              totalCostUsd: parsed.total_cost_usd ?? null,
+              durationMs: parsed.duration_ms ?? null,
+              numTurns: parsed.num_turns ?? null,
+            },
+          });
+          return;
+        }
+      } catch {
+        /* not JSON, skip */
+      }
+    }
+  }
+
   /** Dispatch issue-responder agent and post result to issue comment. */
   private async handleIssueAgentResponse(
     run: WorkflowRun,
@@ -850,6 +884,7 @@ export class Orchestrator {
         if (event.type === "stdout" && event.data) {
           rawStdout += event.data;
         } else if (event.type === "exit") {
+          this.logTokenUsage(run.id, rawStdout);
           break;
         }
       }
@@ -1148,6 +1183,7 @@ export class Orchestrator {
     });
 
     try {
+      let retriggerStdout = "";
       for await (const event of this.dispatcher!.dispatch("claude-code", {
         issueContext,
         agentDefinition,
@@ -1163,7 +1199,10 @@ export class Orchestrator {
         decisionHost: this.decisionHost,
         decisionPort: this.decisionPort,
       })) {
-        if (event.type === "exit") {
+        if (event.type === "stdout" && event.data) {
+          retriggerStdout += event.data;
+        } else if (event.type === "exit") {
+          this.logTokenUsage(run.id, retriggerStdout);
           const code = event.exitCode ?? 0;
           logger.info(
             `[auto-dev] Re-trigger agent for PR #${prNumber} completed (exit ${code})`,

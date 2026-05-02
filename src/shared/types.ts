@@ -100,7 +100,8 @@ export type AuditEventType =
   | "validation_passed"
   | "validation_failed"
   | "pr_created"
-  | "pr_merged";
+  | "pr_merged"
+  | "agent_usage";
 
 export interface AuditEvent {
   id: string;

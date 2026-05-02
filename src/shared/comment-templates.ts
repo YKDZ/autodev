@@ -125,9 +125,9 @@ export const renderCompletionComment = (
     "",
     "## Auto-Dev Workflow Complete",
     "",
-    `**Status**: ${status}`,
+    `**Status**: \`${status}\` (exit ${exitCode})`,
     `**Run ID**: \`${run.id}\``,
-    `**Duration**: ${duration}`,
+    `**Duration**: \`${duration}\``,
     "",
     "<details>",
     "<summary>Configuration</summary>",
@@ -142,15 +142,15 @@ export const renderCompletionComment = (
     "",
     ...(changedFiles
       ? [
-          "<details>",
-          "<summary>Changed Files</summary>",
-          "",
-          "```",
-          changedFiles,
-          "```",
-          "",
-          "</details>",
-        ]
+        "<details>",
+        "<summary>Changed Files</summary>",
+        "",
+        "```",
+        changedFiles,
+        "```",
+        "",
+        "</details>",
+      ]
       : []),
   ].join("\n");
 
@@ -191,14 +191,14 @@ export const renderIssueAgentResponse = (response: string): string =>
 export const renderCreatePRComment = (
   run: WorkflowRun,
   prNumber: number,
-  prUrl: string,
+  _prUrl: string,
 ): string =>
   [
     BOT_MARKER,
     "",
     `## Auto-Dev Created Draft PR`,
     "",
-    `Created Draft PR #${prNumber}: ${prUrl}`,
+    `Created Draft PR #${prNumber}`,
     "",
     `**Run ID**: \`${run.id}\``,
     `**Branch**: \`${run.branch}\``,

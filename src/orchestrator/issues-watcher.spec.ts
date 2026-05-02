@@ -5,9 +5,10 @@ import { IssueWatcher } from "./issues-watcher.js";
 
 vi.mock("../shared/gh-cli.js", () => ({
   listIssues: vi.fn(),
+  getReadyLabelAdder: vi.fn(),
 }));
 
-import { listIssues } from "../shared/gh-cli.js";
+import { listIssues, getReadyLabelAdder } from "../shared/gh-cli.js";
 
 describe("IssueWatcher", () => {
   beforeEach(() => {
@@ -23,6 +24,7 @@ describe("IssueWatcher", () => {
     vi.mocked(listIssues).mockImplementation(() => {
       throw new Error("Network error");
     });
+    vi.mocked(getReadyLabelAdder).mockReturnValue(null);
 
     const watcher = new IssueWatcher();
     const results = watcher.poll("owner/repo", DEFAULT_CONFIG, "/tmp/test");
@@ -40,13 +42,14 @@ describe("IssueWatcher", () => {
         author: { login: "allowed-user" },
       },
     ]);
+    vi.mocked(getReadyLabelAdder).mockReturnValue("allowed-user");
 
     const watcher = new IssueWatcher();
     const results = watcher.poll("owner/repo", DEFAULT_CONFIG, "/tmp/test");
     expect(results).toHaveLength(0);
   });
 
-  it("filters out unauthorized users", () => {
+  it("filters out unauthorized label adders", () => {
     vi.stubEnv("AUTO_DEV_ALLOWED_USERS", "admin,dev1");
     vi.mocked(listIssues).mockReturnValue([
       {
@@ -57,6 +60,7 @@ describe("IssueWatcher", () => {
         author: { login: "unauthorized-user" },
       },
     ]);
+    vi.mocked(getReadyLabelAdder).mockReturnValue("unauthorized-user");
 
     const watcher = new IssueWatcher();
     const results = watcher.poll("owner/repo", DEFAULT_CONFIG, "/tmp/test");
@@ -74,6 +78,7 @@ describe("IssueWatcher", () => {
         author: { login: "any-user" },
       },
     ]);
+    vi.mocked(getReadyLabelAdder).mockReturnValue("any-user");
 
     const watcher = new IssueWatcher();
     const results = watcher.poll("owner/repo", DEFAULT_CONFIG, "/tmp/test");
@@ -91,10 +96,29 @@ describe("IssueWatcher", () => {
         author: { login: "trusted-user" },
       },
     ]);
+    vi.mocked(getReadyLabelAdder).mockReturnValue("trusted-user");
 
     const watcher = new IssueWatcher();
     const results = watcher.poll("owner/repo", DEFAULT_CONFIG, "/tmp/test");
     expect(results).toHaveLength(1);
     expect(results[0]?.issueNumber).toBe(3);
+  });
+
+  it("skips issue when label adder is null", () => {
+    vi.stubEnv("AUTO_DEV_ALLOWED_USERS", "trusted-user");
+    vi.mocked(listIssues).mockReturnValue([
+      {
+        number: 4,
+        title: "Issue 4",
+        labels: [{ name: "auto-dev:ready" }],
+        body: "body",
+        author: { login: "trusted-user" },
+      },
+    ]);
+    vi.mocked(getReadyLabelAdder).mockReturnValue(null);
+
+    const watcher = new IssueWatcher();
+    const results = watcher.poll("owner/repo", DEFAULT_CONFIG, "/tmp/test");
+    expect(results).toHaveLength(0);
   });
 });

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import type { AuditEvent } from "../shared/types.js";
+import type { AuditEvent } from "@/shared/types.js";
 
 import { AuditLogger } from "./audit-logger.js";
 
