@@ -215,6 +215,7 @@ export class DecisionSocketServer {
           typeof parsed === "object" &&
           "token" in parsed &&
           typeof (parsed as Record<string, unknown>).token === "string"
+          // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
           ? ((parsed as Record<string, unknown>).token as string)
           : "";
       if (receivedToken !== expectedToken) {
@@ -230,6 +231,7 @@ export class DecisionSocketServer {
       "getResolution" in parsed &&
       typeof (parsed as Record<string, unknown>)["getResolution"] === "string"
     ) {
+      // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       const requestId = (parsed as Record<string, string>).getResolution;
       const response = await this.options.onGetResolution(requestId);
       if (response) {

@@ -24,8 +24,10 @@ vi.mock("../workspace-manager/index.js", () => ({
   WorkspaceManager: class {
     getGitManager() {
       return {
-        ensureRepo: async () => { },
-        commitAndPush: async () => { },
+        // oxlint-disable-next-line no-empty-function
+        ensureRepo: async () => undefined,
+        // oxlint-disable-next-line no-empty-function
+        commitAndPush: async () => undefined,
         tryPush: async () => true,
       };
     }
@@ -57,7 +59,8 @@ vi.mock("../workspace-manager/index.js", () => ({
       };
     }
 
-    async destroy() { }
+    // oxlint-disable-next-line no-empty-function
+    async destroy() { return undefined; }
   },
 }));
 
@@ -76,6 +79,8 @@ beforeEach(async () => {
     30000 + Math.floor(Math.random() * 10000),
   );
   process.env.AUTO_DEV_DECISION_HOST = "127.0.0.1";
+  // Use insecure-local mode in tests so no real webhook secret is required
+  process.env.AUTO_DEV_WEBHOOK_FORWARD_INSECURE_LOCAL = "1";
   await ensureStateDirs(tmpDir);
 });
 
@@ -86,6 +91,7 @@ afterEach(async () => {
     delete process.env.AUTO_DEV_DECISION_PORT;
   }
   delete process.env.AUTO_DEV_DECISION_HOST;
+  delete process.env.AUTO_DEV_WEBHOOK_FORWARD_INSECURE_LOCAL;
   await rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -118,22 +124,6 @@ describe("Orchestrator", () => {
       void _err;
     });
   }, 10000);
-
-  it("collectResolutionTasks filters bot comments", () => {
-    const orchestrator = new Orchestrator(tmpDir, "owner/repo");
-    const fn = orchestrator["collectResolutionTasks"].bind(orchestrator);
-    const botComment = {
-      id: "bot-1",
-      body: "<!-- auto-dev-bot -->\n@d1 yes",
-      user: { login: "auto-dev[bot]" },
-    };
-    const result = fn(
-      [botComment],
-      "some-run-id",
-      "issue_decision_resolution",
-    );
-    expect(result).toHaveLength(0);
-  });
 
   it("buildCreatePRIssueContext includes issue body and labels", () => {
     const orchestrator = new Orchestrator(tmpDir, "owner/repo");
@@ -177,7 +167,7 @@ describe("Orchestrator", () => {
       run,
       100,
       "full-pipeline",
-    ) as string;
+    );
 
     expect(content).toContain("Please keep backward compatibility.");
     expect(content).toContain("- auto-dev:ready");

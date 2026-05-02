@@ -15,8 +15,23 @@ export {
   findWorkspaceByIssueNumber,
   listAllWorkspaces,
   isEventProcessed,
+  isEventProcessedV2,
   markEventProcessed,
+  markEventProcessedV2,
   cleanupProcessedEvents,
   withTransaction,
   closeDb,
+  upsertWebhookDelivery,
+  getWebhookDelivery,
+  updateWebhookDeliveryStatus,
+  upsertReadyIssueCandidate,
+  listQueuedReadyIssueCandidates,
+  updateReadyIssueCandidateStatus,
+} from "./state-store.js";
+
+export type {
+  WebhookDelivery,
+  WebhookDeliveryStatus,
+  ReadyIssueCandidate,
+  ReadyIssueCandidateStatus,
 } from "./state-store.js";

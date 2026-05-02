@@ -247,6 +247,59 @@ const initSchema = (db: DatabaseSync): void => {
       recordMigration(db, 3);
     });
   }
+
+  if (!hasMigration(db, 4)) {
+    withDbTx(db, () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS webhook_deliveries (
+          delivery_id TEXT PRIMARY KEY,
+          event TEXT NOT NULL,
+          action TEXT,
+          repo_full_name TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'queued',
+          received_at TEXT NOT NULL,
+          processed_at TEXT,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          payload_json TEXT NOT NULL DEFAULT '{}'
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_received_at ON webhook_deliveries(received_at)",
+      );
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ready_issue_candidates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          repo_full_name TEXT NOT NULL,
+          issue_number INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'queued',
+          sender_login TEXT NOT NULL DEFAULT '',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          last_error TEXT,
+          UNIQUE(repo_full_name, issue_number)
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_ready_issue_candidates_status ON ready_issue_candidates(status)",
+      );
+
+      // Extend processed_events with resource_version for comment-edit dedup
+      ensureColumn(
+        db,
+        "processed_events",
+        "resource_version",
+        "TEXT NOT NULL DEFAULT ''",
+      );
+
+      recordMigration(db, 4);
+    });
+  }
 };
 
 export const closeDb = (): void => {
@@ -654,6 +707,25 @@ export const isEventProcessed = (
   return row?.ok === 1;
 };
 
+/** Returns true if the comment has already been processed with the same resource_version. */
+export const isEventProcessedV2 = (
+  workspaceRoot: string,
+  handler: string,
+  githubCommentId: string,
+  resourceVersion: string,
+): boolean => {
+  const db = getDb(workspaceRoot);
+  const row = db
+    .prepare(
+      "SELECT resource_version AS rv FROM processed_events WHERE handler = ? AND github_comment_id = ? LIMIT 1",
+    )
+    .get(handler, githubCommentId) as { rv?: string } | undefined;
+  if (!row) return false;
+  // If no version stored (legacy row), treat as processed to be safe
+  if (!row.rv) return true;
+  return row.rv === resourceVersion;
+};
+
 export const markEventProcessed = async (
   workspaceRoot: string,
   input: {
@@ -668,8 +740,8 @@ export const markEventProcessed = async (
     .prepare(
       `
       INSERT OR IGNORE INTO processed_events
-        (handler, github_comment_id, repo_full_name, issue_or_pr_number, processed_at)
-      VALUES (?, ?, ?, ?, ?)
+        (handler, github_comment_id, repo_full_name, issue_or_pr_number, processed_at, resource_version)
+      VALUES (?, ?, ?, ?, ?, '')
       `,
     )
     .run(
@@ -678,6 +750,41 @@ export const markEventProcessed = async (
       input.repoFullName,
       input.issueOrPrNumber,
       new Date().toISOString(),
+    ) as { changes?: number };
+  return (result.changes ?? 0) > 0;
+};
+
+/** Mark comment processed with a resource_version (for edit dedup). Upserts. */
+export const markEventProcessedV2 = async (
+  workspaceRoot: string,
+  input: {
+    handler: string;
+    githubCommentId: string;
+    repoFullName: string;
+    issueOrPrNumber: number;
+    resourceVersion: string;
+  },
+): Promise<boolean> => {
+  const db = getDb(workspaceRoot);
+  const now = new Date().toISOString();
+  const result = db
+    .prepare(
+      `
+      INSERT INTO processed_events
+        (handler, github_comment_id, repo_full_name, issue_or_pr_number, processed_at, resource_version)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(handler, github_comment_id) DO UPDATE SET
+        resource_version = excluded.resource_version,
+        processed_at = excluded.processed_at
+      `,
+    )
+    .run(
+      input.handler,
+      input.githubCommentId,
+      input.repoFullName,
+      input.issueOrPrNumber,
+      now,
+      input.resourceVersion,
     ) as { changes?: number };
   return (result.changes ?? 0) > 0;
 };
@@ -694,6 +801,193 @@ export const cleanupProcessedEvents = async (
     .prepare("DELETE FROM processed_events WHERE processed_at < ?")
     .run(cutoff) as { changes?: number };
   return result.changes ?? 0;
+};
+
+// ── WebhookDelivery CRUD ──────────────────────────────────────────────────
+
+export type WebhookDeliveryStatus =
+  | "queued"
+  | "processing"
+  | "processed"
+  | "failed"
+  | "ignored";
+
+export interface WebhookDelivery {
+  deliveryId: string;
+  event: string;
+  action: string | null;
+  repoFullName: string;
+  status: WebhookDeliveryStatus;
+  receivedAt: string;
+  processedAt: string | null;
+  attempts: number;
+  lastError: string | null;
+  payloadJson: string;
+}
+
+export const upsertWebhookDelivery = (
+  workspaceRoot: string,
+  delivery: Omit<WebhookDelivery, "attempts" | "lastError" | "processedAt"> & {
+    status: WebhookDeliveryStatus;
+  },
+): void => {
+  const db = getDb(workspaceRoot);
+  db.prepare(
+    `
+    INSERT INTO webhook_deliveries
+      (delivery_id, event, action, repo_full_name, status, received_at, processed_at, attempts, last_error, payload_json)
+    VALUES (?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?)
+    ON CONFLICT(delivery_id) DO NOTHING
+    `,
+  ).run(
+    delivery.deliveryId,
+    delivery.event,
+    delivery.action,
+    delivery.repoFullName,
+    delivery.status,
+    delivery.receivedAt,
+    delivery.payloadJson,
+  );
+};
+
+export const getWebhookDelivery = (
+  workspaceRoot: string,
+  deliveryId: string,
+): WebhookDelivery | null => {
+  const db = getDb(workspaceRoot);
+  const row = db
+    .prepare("SELECT * FROM webhook_deliveries WHERE delivery_id = ?")
+    .get(deliveryId) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    deliveryId: row.delivery_id as string,
+    event: row.event as string,
+    action: (row.action as string) ?? null,
+    repoFullName: row.repo_full_name as string,
+    status: row.status as WebhookDeliveryStatus,
+    receivedAt: row.received_at as string,
+    processedAt: (row.processed_at as string) ?? null,
+    attempts: row.attempts as number,
+    lastError: (row.last_error as string) ?? null,
+    payloadJson: row.payload_json as string,
+  };
+};
+
+export const updateWebhookDeliveryStatus = (
+  workspaceRoot: string,
+  deliveryId: string,
+  status: WebhookDeliveryStatus,
+  error?: string,
+): void => {
+  const db = getDb(workspaceRoot);
+  const now = new Date().toISOString();
+  db.prepare(
+    `
+    UPDATE webhook_deliveries
+    SET status = ?,
+        processed_at = CASE WHEN ? IN ('processed', 'failed', 'ignored') THEN ? ELSE processed_at END,
+        attempts = attempts + 1,
+        last_error = ?
+    WHERE delivery_id = ?
+    `,
+  ).run(status, status, now, error ?? null, deliveryId);
+};
+
+// ── ReadyIssueCandidate CRUD ──────────────────────────────────────────────
+
+export type ReadyIssueCandidateStatus =
+  | "queued"
+  | "claimed"
+  | "skipped"
+  | "failed";
+
+export interface ReadyIssueCandidate {
+  id: number;
+  repoFullName: string;
+  issueNumber: number;
+  status: ReadyIssueCandidateStatus;
+  senderLogin: string;
+  payloadJson: string;
+  createdAt: string;
+  updatedAt: string;
+  lastError: string | null;
+}
+
+export const upsertReadyIssueCandidate = (
+  workspaceRoot: string,
+  candidate: {
+    repoFullName: string;
+    issueNumber: number;
+    senderLogin: string;
+    payloadJson: string;
+  },
+): void => {
+  const db = getDb(workspaceRoot);
+  const now = new Date().toISOString();
+  db.prepare(
+    `
+    INSERT INTO ready_issue_candidates
+      (repo_full_name, issue_number, status, sender_login, payload_json, created_at, updated_at)
+    VALUES (?, ?, 'queued', ?, ?, ?, ?)
+    ON CONFLICT(repo_full_name, issue_number) DO UPDATE SET
+      status = CASE WHEN excluded.status = 'queued' AND ready_issue_candidates.status IN ('failed','skipped') THEN 'queued'
+                    ELSE ready_issue_candidates.status END,
+      updated_at = excluded.updated_at
+    `,
+  ).run(
+    candidate.repoFullName,
+    candidate.issueNumber,
+    candidate.senderLogin,
+    candidate.payloadJson,
+    now,
+    now,
+  );
+};
+
+export const listQueuedReadyIssueCandidates = (
+  workspaceRoot: string,
+  repoFullName: string,
+): ReadyIssueCandidate[] => {
+  const db = getDb(workspaceRoot);
+  const rows = db
+    .prepare(
+      "SELECT * FROM ready_issue_candidates WHERE repo_full_name = ? AND status = 'queued' ORDER BY created_at ASC",
+    )
+    .all(repoFullName) as Record<string, unknown>[];
+  return rows.map((row) => ({
+    id: row.id as number,
+    repoFullName: row.repo_full_name as string,
+    issueNumber: row.issue_number as number,
+    status: row.status as ReadyIssueCandidateStatus,
+    senderLogin: row.sender_login as string,
+    payloadJson: row.payload_json as string,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+    lastError: (row.last_error as string) ?? null,
+  }));
+};
+
+export const updateReadyIssueCandidateStatus = (
+  workspaceRoot: string,
+  issueNumber: number,
+  repoFullName: string,
+  status: ReadyIssueCandidateStatus,
+  error?: string,
+): void => {
+  const db = getDb(workspaceRoot);
+  db.prepare(
+    `
+    UPDATE ready_issue_candidates
+    SET status = ?, updated_at = ?, last_error = ?
+    WHERE issue_number = ? AND repo_full_name = ?
+    `,
+  ).run(
+    status,
+    new Date().toISOString(),
+    error ?? null,
+    issueNumber,
+    repoFullName,
+  );
 };
 
 // ── Transaction helper ───────────────────────────────────────────────────
