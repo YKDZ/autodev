@@ -6,4 +6,5 @@ logs
 todo
 .e2e-workspace
 autodev-data
+docker-compose.test.yml
 tools
