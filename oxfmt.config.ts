@@ -3,7 +3,7 @@ import { defineConfig } from "oxfmt";
 export default defineConfig({
   $schema: "./node_modules/oxfmt/configuration_schema.json",
   printWidth: 80,
-  ignorePatterns: ["**/dist"],
+  ignorePatterns: ["**/dist", "**/.devcontainer/devcontainer-lock.json"],
   sortImports: {
     groups: [
       "type-import",
