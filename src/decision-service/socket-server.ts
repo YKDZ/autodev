@@ -3,11 +3,12 @@ import type { Socket, Server } from "node:net";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 
-import type { AutoDevConfig } from "../config/types.js";
-import type { DecisionRequest, DecisionResponse } from "../shared/types.js";
+import type { DecisionRequest, DecisionResponse } from "@/shared/types.js";
 
-import { logger } from "../shared/logger.js";
-import { DecisionRequestSchema } from "../shared/schemas.js";
+import { logger } from "@/shared/logger.js";
+import { DecisionRequestSchema } from "@/shared/schemas.js";
+
+import type { AutoDevConfig } from "../config/types.js";
 
 interface PendingConnection {
   socket: Socket;

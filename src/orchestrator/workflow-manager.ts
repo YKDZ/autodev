@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 
-import type { WorkflowRun, WorkflowStatus } from "../shared/types.js";
-import type { PollResult } from "../shared/types.js";
+import type { WorkflowRun, WorkflowStatus } from "@/shared/types.js";
+import type { PollResult } from "@/shared/types.js";
 
 import {
   saveWorkflowRun,
   loadWorkflowRun,
   listWorkflowRuns,
-} from "../state-store/index.js";
+} from "@/state-store/index.js";
 
 const deriveBranch = (issueNumber: number): string =>
   `auto-dev/issue-${issueNumber}`;

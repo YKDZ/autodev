@@ -2,7 +2,7 @@
 import { execFileSync, execSync } from "node:child_process";
 import { basename } from "node:path";
 
-import { logger } from "../shared/logger.js";
+import { logger } from "@/shared/logger.js";
 
 export class DevcontainerManager {
   private readonly workspaceRoot: string;

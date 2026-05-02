@@ -1,10 +1,11 @@
-import type { WorkspaceRegistryEntry } from "../shared/types.js";
+import type { WorkspaceRegistryEntry } from "@/shared/types.js";
 
-import { logger } from "../shared/logger.js";
+import { logger } from "@/shared/logger.js";
 import {
   registerWorkspace,
   findWorkspaceByIssueNumber,
-} from "../state-store/index.js";
+} from "@/state-store/index.js";
+
 import { DevcontainerManager } from "./devcontainer-manager.js";
 import { GitManager } from "./git-manager.js";
 

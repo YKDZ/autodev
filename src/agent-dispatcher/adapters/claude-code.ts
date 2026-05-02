@@ -1,10 +1,13 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-import type { AgentInvoker, AgentContext, AgentEvent } from "../protocol.js";
-
+import {
+  parseFrontmatter,
+  stripFrontmatter,
+} from "@/shared/frontmatter-parser.js";
 import { getAuthEnv } from "@/shared/github-app-auth.js";
-import { parseFrontmatter, stripFrontmatter } from "@/shared/frontmatter-parser.js";
+
+import type { AgentInvoker, AgentContext, AgentEvent } from "../protocol.js";
 
 const forwardHostEnv = (): Record<string, string> => {
   const result: Record<string, string> = {};
@@ -74,11 +77,11 @@ export class ClaudeCodeAdapter implements AgentInvoker {
       // Also expose the auto-dev CLI on PATH so agents can call it.
       ...(context.containerId
         ? {
-          AUTO_DEV_DECISION_HOST:
-            context.decisionHost ?? "host.docker.internal",
-          AUTO_DEV_DECISION_PORT: String(context.decisionPort ?? 3000),
-          PATH: "/var/run/auto-dev:/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        }
+            AUTO_DEV_DECISION_HOST:
+              context.decisionHost ?? "host.docker.internal",
+            AUTO_DEV_DECISION_PORT: String(context.decisionPort ?? 3000),
+            PATH: "/var/run/auto-dev:/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          }
         : {}),
       // Pass the workflow run ID so agents can call `auto-dev request-decision`.
       ...(context.workflowRunId

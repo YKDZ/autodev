@@ -3,12 +3,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DEFAULT_CONFIG } from "../config/types.js";
 import { IssueWatcher } from "./issues-watcher.js";
 
-vi.mock("../shared/gh-cli.js", () => ({
+vi.mock("@/shared/gh-cli.js", () => ({
   listIssues: vi.fn(),
   getReadyLabelAdder: vi.fn(),
 }));
 
-import { listIssues, getReadyLabelAdder } from "../shared/gh-cli.js";
+import { listIssues, getReadyLabelAdder } from "@/shared/gh-cli.js";
 
 describe("IssueWatcher", () => {
   beforeEach(() => {

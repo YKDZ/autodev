@@ -7,9 +7,10 @@ import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import z from "zod";
 
-import type { DecisionRequest, DecisionResponse } from "../shared/types.js";
+import type { DecisionRequest, DecisionResponse } from "@/shared/types.js";
 
 import { DEFAULT_CONFIG } from "@/config/types.js";
+
 import { DecisionSocketServer } from "./socket-server.js";
 
 let tmpDir: string;

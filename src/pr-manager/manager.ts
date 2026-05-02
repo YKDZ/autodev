@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 
-import { getAuthEnv } from "../shared/github-app-auth.js";
+import { getAuthEnv } from "@/shared/github-app-auth.js";
 
 export class PRManager {
   private readonly repoFullName: string;

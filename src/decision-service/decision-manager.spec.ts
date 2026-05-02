@@ -5,16 +5,17 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import type { WorkflowRun, DecisionRequest } from "../shared/types.js";
+import type { WorkflowRun, DecisionRequest } from "@/shared/types.js";
 
-import { DEFAULT_CONFIG } from "../config/types.js";
-import { DecisionNotFoundError } from "../shared/errors.js";
+import { DecisionNotFoundError } from "@/shared/errors.js";
 import {
   ensureStateDirs,
   saveWorkflowRun,
   loadWorkflowRun,
   loadDecision,
-} from "../state-store/index.js";
+} from "@/state-store/index.js";
+
+import { DEFAULT_CONFIG } from "../config/types.js";
 import { DecisionManager } from "./decision-manager.js";
 
 let tmpDir: string;

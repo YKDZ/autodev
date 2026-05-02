@@ -1,4 +1,4 @@
-import { logger } from "../shared/logger.js";
+import { logger } from "@/shared/logger.js";
 
 export const runStop = async (_args: string[]): Promise<void> => {
   logger.out(

@@ -16,9 +16,9 @@ import type {
   WorkflowRun,
   DecisionBlock,
   WorkspaceRegistryEntry,
-} from "../shared/types.js";
+} from "@/shared/types.js";
 
-import { WorkflowRunSchema, DecisionBlockSchema } from "../shared/schemas.js";
+import { WorkflowRunSchema, DecisionBlockSchema } from "@/shared/schemas.js";
 
 const MIGRATION_MARKER_FILE = ".migrated-to-sqlite";
 

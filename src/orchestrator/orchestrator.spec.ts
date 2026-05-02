@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("../shared/gh-cli.js", () => ({
+vi.mock("@/shared/gh-cli.js", () => ({
   listIssues: vi.fn().mockReturnValue([]),
 }));
 
@@ -18,7 +18,8 @@ vi.mock("../config/loader.js", () => ({
   }),
 }));
 
-import { ensureStateDirs } from "../state-store/index.js";
+import { ensureStateDirs } from "@/state-store/index.js";
+
 import { Orchestrator } from "./orchestrator.js";
 
 let tmpDir: string;

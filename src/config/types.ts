@@ -1,4 +1,4 @@
-import type { AgentModel } from "../shared/types.js";
+import type { AgentModel } from "@/shared/types.js";
 
 export interface AgentRegistration {
   definition: string;

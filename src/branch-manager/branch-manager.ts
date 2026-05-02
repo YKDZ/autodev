@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { getAuthEnv } from "../shared/github-app-auth.js";
-import { logger } from "../shared/logger.js";
+import { getAuthEnv } from "@/shared/github-app-auth.js";
+import { logger } from "@/shared/logger.js";
 
 const git = (args: string[], cwd: string): string => {
   try {

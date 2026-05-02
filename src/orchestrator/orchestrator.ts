@@ -2,16 +2,8 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { networkInterfaces } from "node:os";
 
-import type { AutoDevConfig } from "../config/types.js";
-import type { WorkflowRun } from "../shared/types.js";
-import type { WorkspaceInfo } from "../workspace-manager/index.js";
+import type { WorkflowRun } from "@/shared/types.js";
 
-import { AgentDispatcher } from "../agent-dispatcher/index.js";
-import { AuditLogger } from "../audit-logger/index.js";
-import { loadConfig } from "../config/loader.js";
-import { DecisionManager } from "../decision-service/decision-manager.js";
-import { DecisionSocketServer } from "../decision-service/socket-server.js";
-import { PRManager } from "../pr-manager/index.js";
 import {
   renderWorkspaceComment,
   renderDecisionComment,
@@ -22,7 +14,7 @@ import {
   renderWorkspaceReadyComment,
   renderIssueAgentResponse,
   renderCreatePRComment,
-} from "../shared/comment-templates.js";
+} from "@/shared/comment-templates.js";
 import {
   createComment,
   listIssueComments,
@@ -33,9 +25,9 @@ import {
   addCommentReaction,
   getIssueState,
   getPRState,
-} from "../shared/gh-cli.js";
-import { logger } from "../shared/logger.js";
-import { isAllowedUser } from "../shared/user-filter.js";
+} from "@/shared/gh-cli.js";
+import { logger } from "@/shared/logger.js";
+import { isAllowedUser } from "@/shared/user-filter.js";
 import {
   ensureStateDirs,
   saveWorkflowRun,
@@ -45,7 +37,17 @@ import {
   listWorkflowRuns,
   unregisterWorkspace,
   listAllWorkspaces,
-} from "../state-store/index.js";
+} from "@/state-store/index.js";
+
+import type { AutoDevConfig } from "../config/types.js";
+import type { WorkspaceInfo } from "../workspace-manager/index.js";
+
+import { AgentDispatcher } from "../agent-dispatcher/index.js";
+import { AuditLogger } from "../audit-logger/index.js";
+import { loadConfig } from "../config/loader.js";
+import { DecisionManager } from "../decision-service/decision-manager.js";
+import { DecisionSocketServer } from "../decision-service/socket-server.js";
+import { PRManager } from "../pr-manager/index.js";
 import { WorkspaceManager } from "../workspace-manager/index.js";
 import { IssueWatcher } from "./issues-watcher.js";
 import { WorkflowManager } from "./workflow-manager.js";
@@ -392,7 +394,7 @@ export class Orchestrator {
   // ── Issue lifecycle ──────────────────────────────────────────────────
 
   private async handleNewIssue(
-    result: import("../shared/types.js").PollResult,
+    result: import("@/shared/types.js").PollResult,
   ): Promise<void> {
     const run = await this.workflowManager!.createRun(
       result,
@@ -1098,7 +1100,7 @@ export class Orchestrator {
     prNumber: number,
   ): Promise<void> {
     const { parseFrontmatter, stripFrontmatter } =
-      await import("../shared/frontmatter-parser.js");
+      await import("@/shared/frontmatter-parser.js");
     const frontmatterConfig = parseFrontmatter(commentBody);
 
     const model = frontmatterConfig?.model ?? run.agentModel;

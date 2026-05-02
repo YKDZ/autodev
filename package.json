@@ -1,5 +1,5 @@
 {
-  "name": "@tools/auto-dev",
+  "name": "autodev",
   "version": "0.0.1",
   "private": true,
   "bin": {

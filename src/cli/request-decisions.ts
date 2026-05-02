@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { createConnection } from "node:net";
 import { parseArgs } from "node:util";
-import { z } from "zod/v4";
+import { z } from "zod";
 
-import { logger } from "../shared/logger.js";
+import { logger } from "@/shared/logger.js";
 
 const DecisionInputItemSchema = z.object({
   id: z.string().optional(),

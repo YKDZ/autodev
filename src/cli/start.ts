@@ -1,4 +1,4 @@
-import { Orchestrator } from "../orchestrator/index.js";
+import { Orchestrator } from "@/orchestrator/index.js";
 
 export const runStart = async (args: string[]): Promise<void> => {
   const { parseArgs } = await import("node:util");

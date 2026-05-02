@@ -1,7 +1,8 @@
+import { logger } from "@/shared/logger.js";
+import { ensureStateDirs } from "@/state-store/index.js";
+
 import { loadConfig } from "../config/loader.js";
 import { DecisionManager } from "../decision-service/decision-manager.js";
-import { logger } from "../shared/logger.js";
-import { ensureStateDirs } from "../state-store/index.js";
 
 export const runDecisions = async (_args: string[]): Promise<void> => {
   const workspaceRoot = process.env.MOON_WORKSPACE_ROOT ?? process.cwd();

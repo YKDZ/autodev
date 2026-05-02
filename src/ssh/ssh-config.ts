@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
 
-import { logger } from "../shared/logger.js";
+import { logger } from "@/shared/logger.js";
 
 export const generateSSHConfig = (): void => {
   const publicKey = process.env.SSH_PUBLIC_KEY;

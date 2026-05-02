@@ -417,8 +417,7 @@ export const getReadyLabelAdder = (
         };
       };
     };
-    const nodes =
-      result.data?.repository?.issue?.timelineItems?.nodes ?? [];
+    const nodes = result.data?.repository?.issue?.timelineItems?.nodes ?? [];
     // Return the most recent actor who added auto-dev:ready (last occurrence)
     let lastAdder: string | null = null;
     for (const node of nodes) {

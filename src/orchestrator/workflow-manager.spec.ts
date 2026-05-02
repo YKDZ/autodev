@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import type { PollResult } from "../shared/types.js";
+import type { PollResult } from "@/shared/types.js";
 
-import { ensureStateDirs, listWorkflowRuns } from "../state-store/index.js";
+import { ensureStateDirs, listWorkflowRuns } from "@/state-store/index.js";
+
 import { WorkflowManager } from "./workflow-manager.js";
 
 let tmpDir: string;

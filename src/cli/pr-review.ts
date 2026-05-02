@@ -5,8 +5,8 @@ import {
   getPRHeadSha,
   listPRReviewComments,
   submitPRReview,
-} from "../shared/gh-cli.js";
-import { logger } from "../shared/logger.js";
+} from "@/shared/gh-cli.js";
+import { logger } from "@/shared/logger.js";
 
 const getRepo = (): string => {
   const repo = process.env.GITHUB_REPOSITORY ?? process.env.REPO_FULL_NAME;

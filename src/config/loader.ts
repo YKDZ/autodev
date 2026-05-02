@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { ConfigLoadError } from "@/shared/errors.js";
+import { logger } from "@/shared/logger.js";
+
 import type { AutoDevConfig, AgentRegistration } from "./types.js";
 
-import { ConfigLoadError } from "../shared/errors.js";
-import { logger } from "../shared/logger.js";
 import { DEFAULT_CONFIG } from "./types.js";
 
 /**

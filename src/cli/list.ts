@@ -1,5 +1,5 @@
-import { logger } from "../shared/logger.js";
-import { listWorkflowRuns } from "../state-store/index.js";
+import { logger } from "@/shared/logger.js";
+import { listWorkflowRuns } from "@/state-store/index.js";
 
 export const runList = async (_args: string[]): Promise<void> => {
   const workspaceRoot = process.env.MOON_WORKSPACE_ROOT ?? process.cwd();

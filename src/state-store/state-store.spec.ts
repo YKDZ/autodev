@@ -10,7 +10,7 @@ import type {
   WorkflowRun,
   DecisionBlock,
   WorkspaceRegistryEntry,
-} from "../shared/types.js";
+} from "@/shared/types.js";
 
 import {
   ensureStateDirs,

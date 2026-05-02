@@ -1,9 +1,9 @@
 import { appendFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import type { AuditEvent } from "../shared/types.js";
+import type { AuditEvent } from "@/shared/types.js";
 
-import { AuditEventSchema } from "../shared/schemas.js";
+import { AuditEventSchema } from "@/shared/schemas.js";
 
 export class AuditLogger {
   private readonly workspaceRoot: string;

@@ -1,7 +1,7 @@
 import { execFileSync, execSync } from "node:child_process";
 import { parseArgs } from "node:util";
 
-import { logger } from "../shared/logger.js";
+import { logger } from "@/shared/logger.js";
 
 interface CheckRun {
   name: string;
