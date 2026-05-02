@@ -1,0 +1,6 @@
+Label adder auth test passed.
+
+This file verifies that the label adder authorization fix works correctly:
+- getReadyLabelAdder returns the LAST actor who added auto-dev:ready label
+- The pipeline processes the issue only when an authorized user added the label
+- Commit a57d36d fixed the issue by iterating through all LabeledEvents and taking the last match
