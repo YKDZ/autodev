@@ -3,7 +3,8 @@ import { resolve } from "node:path";
 
 import type { AgentInvoker, AgentContext, AgentEvent } from "../protocol.js";
 
-import { getAuthEnv } from "../../shared/github-app-auth.js";
+import { getAuthEnv } from "@/shared/github-app-auth.js";
+import { parseFrontmatter, stripFrontmatter } from "@/shared/frontmatter-parser.js";
 
 const forwardHostEnv = (): Record<string, string> => {
   const result: Record<string, string> = {};
@@ -27,9 +28,7 @@ export class ClaudeCodeAdapter implements AgentInvoker {
     const rawContent = existsSync(defPath)
       ? readFileSync(defPath, "utf-8")
       : "";
-    const { parseFrontmatter: parseFm, stripFrontmatter } =
-      await import("../../shared/frontmatter-parser.js");
-    const agentFm = parseFm(rawContent);
+    const agentFm = parseFrontmatter(rawContent);
     const defContent = stripFrontmatter(rawContent);
 
     // Agent definition frontmatter provides defaults (lowest priority)
@@ -66,20 +65,20 @@ export class ClaudeCodeAdapter implements AgentInvoker {
       MOON_WORKSPACE_ROOT: context.workspaceRoot,
       // Provide git identity via env so agents can commit without running
       // `git config` or `git init`. These are the standard git env vars.
-      GIT_AUTHOR_NAME: "Auto-Dev Bot",
+      GIT_AUTHOR_NAME: "Auto-Dev Agent",
       GIT_AUTHOR_EMAIL: "auto-dev[bot]@users.noreply.github.com",
-      GIT_COMMITTER_NAME: "Auto-Dev Bot",
+      GIT_COMMITTER_NAME: "Auto-Dev Agent",
       GIT_COMMITTER_EMAIL: "auto-dev[bot]@users.noreply.github.com",
       // When running in a devcontainer, inject the TCP decision server address
       // so agents can call `auto-dev request-decision` via TCP instead of Unix socket.
       // Also expose the auto-dev CLI on PATH so agents can call it.
       ...(context.containerId
         ? {
-            AUTO_DEV_DECISION_HOST:
-              context.decisionHost ?? "host.docker.internal",
-            AUTO_DEV_DECISION_PORT: String(context.decisionPort ?? 3000),
-            PATH: "/var/run/auto-dev:/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-          }
+          AUTO_DEV_DECISION_HOST:
+            context.decisionHost ?? "host.docker.internal",
+          AUTO_DEV_DECISION_PORT: String(context.decisionPort ?? 3000),
+          PATH: "/var/run/auto-dev:/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        }
         : {}),
       // Pass the workflow run ID so agents can call `auto-dev request-decision`.
       ...(context.workflowRunId
@@ -116,7 +115,7 @@ export class ClaudeCodeAdapter implements AgentInvoker {
             "config",
             "--global",
             "user.name",
-            "Auto-Dev Bot",
+            "Auto-Dev Agent",
           ],
           { stdio: "ignore" },
         );

@@ -2,7 +2,7 @@ import type { AutoDevConfig } from "../config/types.js";
 import type { PollResult } from "../shared/types.js";
 
 import { parseFrontmatter } from "../shared/frontmatter-parser.js";
-import { listIssues } from "../shared/gh-cli.js";
+import { getReadyLabelAdder, listIssues } from "../shared/gh-cli.js";
 import { logger } from "../shared/logger.js";
 import { isAllowedUser } from "../shared/user-filter.js";
 import { listWorkflowRuns } from "../state-store/index.js";
@@ -33,10 +33,10 @@ export class IssueWatcher {
     const results: PollResult[] = [];
 
     for (const issue of issues) {
-      const author = issue.author?.login ?? "";
-      if (author && !isAllowedUser(author)) {
+      const labelAdder = getReadyLabelAdder(repo, issue.number);
+      if (!labelAdder || !isAllowedUser(labelAdder)) {
         logger.info(
-          `[auto-dev] Skipping issue #${issue.number} from unauthorized user "${author}"`,
+          `[auto-dev] Skipping issue #${issue.number}: label adder "${labelAdder ?? "unknown"}" is not authorized`,
         );
         continue;
       }

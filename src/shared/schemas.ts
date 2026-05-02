@@ -120,6 +120,7 @@ export const AuditEventSchema = z.object({
     "validation_failed",
     "pr_created",
     "pr_merged",
+    "agent_usage",
   ]),
   payload: z.record(z.string(), z.unknown()),
 });

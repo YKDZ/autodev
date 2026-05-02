@@ -359,6 +359,77 @@ export const getPRState = (
   return JSON.parse(output) as { state: string; mergedAt: string | null };
 };
 
+/**
+ * Query who added the "auto-dev:ready" label to an issue via the GitHub GraphQL API.
+ * Returns the actor login, or null if not found or on error.
+ */
+export const getReadyLabelAdder = (
+  repo: string,
+  issueNumber: number,
+): string | null => {
+  const slashIdx = repo.indexOf("/");
+  if (slashIdx === -1) return null;
+  const owner = repo.slice(0, slashIdx);
+  const repoName = repo.slice(slashIdx + 1);
+  const query = [
+    "query($owner: String!, $repo: String!, $issue_number: Int!) {",
+    "  repository(owner: $owner, name: $repo) {",
+    "    issue(number: $issue_number) {",
+    "      timelineItems(first: 50, itemTypes: LABELED_EVENT) {",
+    "        nodes {",
+    "          ... on LabeledEvent {",
+    "            actor { login }",
+    "            label { name }",
+    "          }",
+    "        }",
+    "      }",
+    "    }",
+    "  }",
+    "}",
+  ].join("\n");
+
+  try {
+    const output = gh([
+      "api",
+      "graphql",
+      "-F",
+      `owner=${owner}`,
+      "-F",
+      `repo=${repoName}`,
+      "-F",
+      `issue_number=${issueNumber}`,
+      "-f",
+      `query=${query}`,
+    ]);
+
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+    const result = JSON.parse(output) as {
+      data?: {
+        repository?: {
+          issue?: {
+            timelineItems?: {
+              nodes?: Array<{
+                actor?: { login: string };
+                label?: { name: string };
+              }>;
+            };
+          };
+        };
+      };
+    };
+    const nodes =
+      result.data?.repository?.issue?.timelineItems?.nodes ?? [];
+    for (const node of nodes) {
+      if (node.label?.name === "auto-dev:ready" && node.actor?.login) {
+        return node.actor.login;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
 /** Create a PR with optional draft flag. */
 export const createPRWithDraft = (
   repo: string,

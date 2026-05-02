@@ -201,6 +201,60 @@ docker exec "$CONTAINER_ID" bash -c 'git status 2>&1; git rev-parse --show-tople
   decision（从未被 resolve）会占用 slot
 - **处理**：清理测试中遗留的 `pending` 状态 decision，或增大 `maxDecisionPerRun`
 
+### Bug 6：`devcontainer-lock.json` 导致 CI 格式检查失败
+
+- **现象**：PR 的 CI 在 `fmt-check` 步骤失败，错误信息为
+  `".devcontainer/devcontainer-lock.json" doesn't end with a newline`
+- **根因**：devcontainer CLI 每次启动 devcontainer 时都会重新生成
+  `.devcontainer/devcontainer-lock.json`，该文件末尾无换行符，
+  但 oxfmt（Biome）格式检查要求所有文件以换行结尾
+- **修复**：在 `oxfmt.config.ts` 的 `ignorePatterns` 中添加该文件：
+  ```ts
+  ignorePatterns: ["**/dist", "**/.devcontainer/devcontainer-lock.json"],
+  ```
+  并将此修改推送到 `main` 分支，再将 main 合并到 PR 分支触发新 CI：
+  ```bash
+  git -C /workspaces/autodev/autodev-data/tools/auto-dev/worktrees/issue-N \
+    merge origin/main
+  git -C /workspaces/autodev/autodev-data/tools/auto-dev/worktrees/issue-N push
+  ```
+
+### Bug 7：用 bot token 创建 issue 被 orchestrator 拒绝
+
+- **现象**：用 GitHub App token 创建的 issue 被 orchestrator 忽略，
+  日志报 `unauthorized user app/ykdz-s-autodevbot`
+- **根因**：orchestrator 过滤掉由自身 bot 账号创建的 issue，防止自循环
+- **修复**：测试用 issue 必须由**人类用户的 Personal Access Token** 创建，
+  不能使用 GitHub App token：
+  ```bash
+  GH_TOKEN="ghp_xxxx..." gh issue create \
+    --repo YKDZ/autodev \
+    --title "..." --body "..." --label "auto-dev:ready"
+  ```
+
+### Bug 8：`ci-status` 对旧 PR 返回 "No CI configured"
+
+- **现象**：对历史 PR 运行 `auto-dev ci-status --pr N` 返回 `{"configured":false,...}`
+- **根因**：旧 PR 在 CI workflow 添加之前创建，从未触发过 check run，
+  GitHub API 返回空的 check-runs 列表
+- **处理**：测试 CI 阅读功能时，必须使用**近期新建**的 PR（在 CI workflow 存在后创建）。
+  可用 `gh pr list --repo YKDZ/autodev` 确认 PR 是否在 CI 期间创建。
+
+### Bug 9：在 orchestrator 容器外手动调用 `ci-status` 时缺少 `GH_TOKEN`
+
+- **现象**：直接 `docker exec autodev-test auto-dev ci-status --pr N` 时
+  `gh` CLI 报 authentication 错误
+- **根因**：`docker exec` 启动的 shell 不继承 orchestrator 进程的环境变量，
+  `GH_TOKEN` 未传入
+- **处理**：手动测试时从 orchestrator 进程环境中提取 token：
+  ```bash
+  TOKEN=$(docker exec autodev-test \
+    cat /proc/1/environ | tr '\0' '\n' | grep '^GH_TOKEN=' | cut -d= -f2-)
+  docker exec -e GH_TOKEN="$TOKEN" autodev-test auto-dev ci-status --pr N
+  ```
+  在实际 agent 运行中不存在此问题，orchestrator 已通过 `docker exec -e` 注入
+  `GH_TOKEN` 到 agent 环境。
+
 ## 修改代码后的更新流程
 
 每次修改源码后需要：
@@ -227,17 +281,3 @@ docker exec autodev-test grep -n "normalizedOptions\|要验证的关键字" \
 - volumes 中 workspace data 也使用相同路径（`/opt/dev/autodev/autodev-data:/opt/dev/autodev/autodev-data`）
 - Docker socket bind-mount（`/var/run/docker.sock`）允许 orchestrator 管理 devcontainer
 - 私钥通过 `/run/secrets/` 只读挂载
-
-## 测试完成标准
-
-以下全部通过即测试完成：
-
-- [x] Issue claim：orchestrator 检测到 `auto-dev:ready` label 并认领
-- [x] Worktree 创建：`tools/auto-dev/worktrees/issue-N/` 存在
-- [x] Devcontainer 启动：fallback container 或 devcontainer 启动成功
-- [x] PR 创建：auto-dev bot 自动创建 PR 并附 init commit
-- [x] Decision 创建：agent 运行 `auto-dev request-decision`，DB 出现 pending record
-- [x] Decision 解决：`resolve-decision` 后 agent 继续执行
-- [x] 文件编辑提交：agent 创建文件并 `git commit`，PR 显示 `additions > 0`
-- [x] PR 推送：`tryPush` 将 agent commit 推到 remote
-- [ ] PR @re-trigger：PR 评论 `@autodev` 触发 agent 在原 worktree 继续工作
