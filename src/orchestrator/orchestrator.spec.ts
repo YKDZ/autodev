@@ -28,7 +28,9 @@ beforeEach(async () => {
   tmpDir = mkdtempSync(resolve(tmpdir(), "coord-test-"));
   oldDecisionPort = process.env.AUTO_DEV_DECISION_PORT;
   // Use a random high port for tests to avoid conflicts
-  process.env.AUTO_DEV_DECISION_PORT = String(30000 + Math.floor(Math.random() * 10000));
+  process.env.AUTO_DEV_DECISION_PORT = String(
+    30000 + Math.floor(Math.random() * 10000),
+  );
   process.env.AUTO_DEV_DECISION_HOST = "127.0.0.1";
   await ensureStateDirs(tmpDir);
 });

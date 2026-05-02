@@ -75,7 +75,8 @@ export class ClaudeCodeAdapter implements AgentInvoker {
       // Also expose the auto-dev CLI on PATH so agents can call it.
       ...(context.containerId
         ? {
-            AUTO_DEV_DECISION_HOST: context.decisionHost ?? "host.docker.internal",
+            AUTO_DEV_DECISION_HOST:
+              context.decisionHost ?? "host.docker.internal",
             AUTO_DEV_DECISION_PORT: String(context.decisionPort ?? 3000),
             PATH: "/var/run/auto-dev:/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
           }

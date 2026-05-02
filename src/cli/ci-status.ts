@@ -209,9 +209,7 @@ export const runCIStatus = async (args: string[]): Promise<void> => {
       process.exit(1);
     }
 
-    logger.info(
-      `[ci-status] ${status.summary} — waiting ${intervalSec}s...`,
-    );
+    logger.info(`[ci-status] ${status.summary} — waiting ${intervalSec}s...`);
 
     // oxlint-disable-next-line eslint/no-await-in-loop
     await new Promise<void>((resolve) =>

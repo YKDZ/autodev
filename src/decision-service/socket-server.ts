@@ -50,9 +50,7 @@ export class DecisionSocketServer {
       });
 
       this.server.on("error", (err: NodeJS.ErrnoException) => {
-        logger.error(
-          `[auto-dev] Decision TCP server error: ${err.message}`,
-        );
+        logger.error(`[auto-dev] Decision TCP server error: ${err.message}`);
         reject(err);
       });
 

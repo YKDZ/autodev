@@ -36,13 +36,7 @@ export class DevcontainerManager {
     try {
       output = execFileSync(
         "devcontainer",
-        [
-          "up",
-          "--workspace-folder",
-          worktreePath,
-          "--mount",
-          gitMountArg,
-        ],
+        ["up", "--workspace-folder", worktreePath, "--mount", gitMountArg],
         {
           encoding: "utf-8",
           stdio: ["ignore", "pipe", "pipe"],
@@ -52,10 +46,7 @@ export class DevcontainerManager {
       logger.warn(
         `[auto-dev] Devcontainer up failed for ${worktreePath}, trying direct docker run fallback: ${String(err)}`,
       );
-      return this.startFallbackContainer(
-        worktreePath,
-        defaultRemoteFolder,
-      );
+      return this.startFallbackContainer(worktreePath, defaultRemoteFolder);
     }
 
     // Parse JSON output to extract containerId and remoteWorkspaceFolder
