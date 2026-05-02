@@ -31,7 +31,9 @@ const getFreePort = async (): Promise<number> =>
         reject(new Error("Unexpected address type"));
         return;
       }
-      srv.close(() => { resolvePort(addr.port); });
+      srv.close(() => {
+        resolvePort(addr.port);
+      });
     });
     srv.on("error", reject);
   });

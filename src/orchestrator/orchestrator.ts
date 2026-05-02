@@ -69,7 +69,8 @@ const resolveDecisionPort = (): number => {
  * is itself a container and workers are sibling containers).
  */
 const resolveDecisionHost = (): string => {
-  if (process.env.AUTO_DEV_DECISION_HOST) return process.env.AUTO_DEV_DECISION_HOST;
+  if (process.env.AUTO_DEV_DECISION_HOST)
+    return process.env.AUTO_DEV_DECISION_HOST;
   for (const ifaces of Object.values(networkInterfaces())) {
     for (const iface of ifaces ?? []) {
       if (!iface.internal && iface.family === "IPv4") {
