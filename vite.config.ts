@@ -23,10 +23,6 @@ export default defineConfig({
       entry: {
         index: resolve(import.meta.dirname, "src/index.ts"),
         cli: resolve(import.meta.dirname, "src/cli.ts"),
-        "scripts/get-installation-token": resolve(
-          import.meta.dirname,
-          "src/scripts/get-installation-token.ts",
-        ),
       },
       formats: ["es"],
     },
