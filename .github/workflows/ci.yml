@@ -64,5 +64,8 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build
+        run: pnpm exec vite build
+
       - name: Run Unit Tests
         run: pnpm test
