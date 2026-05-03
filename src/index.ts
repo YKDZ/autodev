@@ -22,3 +22,4 @@ export { DecisionSocketServer } from "./decision-service/index.js";
 export { DecisionManager } from "./decision-service/index.js";
 export { ValidationGate } from "./validation/index.js";
 export { AuditLogger } from "./audit-logger/index.js";
+export { helloWorld } from "./shared/hello.js";
