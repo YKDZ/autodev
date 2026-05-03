@@ -20,6 +20,12 @@ const generateJwt = (appId: string, privateKey: string): string => {
 };
 
 export const getInstallationToken = (): string => {
+  // If a pre-generated token is already in the environment (e.g., injected
+  // into a devcontainer from the orchestrator), use it directly without
+  // needing the full GitHub App credentials.
+  const envToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+  if (envToken) return envToken;
+
   const appId = process.env.GITHUB_APP_ID;
   const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
   const installationId = process.env.GITHUB_APP_INSTALLATION_ID;

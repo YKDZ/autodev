@@ -8,6 +8,17 @@ import {
 import { getAuthEnv } from "@/shared/github-app-auth.js";
 
 import type { AgentInvoker, AgentContext, AgentEvent } from "../protocol.js";
+import type { AgentToolProfile } from "@/config/types.js";
+
+const ALLOWED_TOOLS_BY_PROFILE: Record<AgentToolProfile, string[]> = {
+  "issue-responder": ["Read", "Glob", "Grep", "Bash"],
+  "pr-reviewer": ["Read", "Glob", "Grep", "Bash"],
+  implementation: ["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
+  retrigger: ["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
+};
+
+const resolveAllowedTools = (profile: AgentToolProfile | undefined): string =>
+  (ALLOWED_TOOLS_BY_PROFILE[profile ?? "implementation"] ?? ALLOWED_TOOLS_BY_PROFILE["implementation"]).join(",");
 
 const forwardHostEnv = (): Record<string, string> => {
   const result: Record<string, string> = {};
@@ -16,6 +27,15 @@ const forwardHostEnv = (): Record<string, string> => {
     if (key.startsWith("ANTHROPIC_")) {
       result[key] = value;
     }
+  }
+  // Inject a short-lived GitHub installation token so agents inside the
+  // devcontainer can use `gh` CLI and `auto-dev pr-review-comment` without
+  // needing the full GitHub App credentials mounted in the container.
+  try {
+    Object.assign(result, getAuthEnv());
+  } catch {
+    // Best-effort: if token generation fails, GitHub-dependent commands
+    // inside the container will fail on their own.
   }
   return result;
 };
@@ -28,9 +48,18 @@ export class ClaudeCodeAdapter implements AgentInvoker {
     const defFile =
       context.agentDefinitionFile ?? `${context.agentDefinition}.md`;
     const defPath = resolve(agentsDir, defFile);
-    const rawContent = existsSync(defPath)
-      ? readFileSync(defPath, "utf-8")
-      : "";
+
+    // Prefer embedded content from the agent registration, fall back to file
+    const rawContent =
+      context.agentDefinitionContent ??
+      (existsSync(defPath) ? readFileSync(defPath, "utf-8") : "");
+
+    if (!rawContent.trim()) {
+      throw new Error(
+        `Agent definition not found: ${context.agentDefinition} (file: ${defPath})`,
+      );
+    }
+
     const agentFm = parseFrontmatter(rawContent);
     const defContent = stripFrontmatter(rawContent);
 
@@ -50,22 +79,21 @@ export class ClaudeCodeAdapter implements AgentInvoker {
       "stream-json",
       "--verbose",
       "--allowedTools",
-      "Bash,Read,Write,Edit,Glob,Grep",
+      resolveAllowedTools(context.toolProfile),
       "--max-turns",
       String(maxTurns),
     ];
 
     if (model) args.push("--model", model);
     if (effort) args.push("--effort", effort);
+    // Session resumption: --resume takes priority over --session-id
+    if (context.resumeSessionId) {
+      args.push("--resume", context.resumeSessionId);
+    } else if (context.sessionId) {
+      args.push("--session-id", context.sessionId);
+    }
 
     const env: Record<string, string> = {
-      ...(() => {
-        try {
-          return getAuthEnv();
-        } catch {
-          return {};
-        }
-      })(),
       ...forwardHostEnv(),
       CLAUDE_CODE_TOOL_TIMEOUT_MS: "86400000",
       WORKSPACE_ROOT: context.workspaceRoot,
@@ -75,16 +103,21 @@ export class ClaudeCodeAdapter implements AgentInvoker {
       GIT_AUTHOR_EMAIL: "auto-dev[bot]@users.noreply.github.com",
       GIT_COMMITTER_NAME: "Auto-Dev Agent",
       GIT_COMMITTER_EMAIL: "auto-dev[bot]@users.noreply.github.com",
+      // Inject CLI profile and resource scope for agent CLI commands
+      AUTO_DEV_AGENT_CLI_PROFILE: context.cliProfile ?? "none",
+      AUTO_DEV_REPO_FULL_NAME: context.resourceScope?.repoFullName ?? "",
+      AUTO_DEV_ISSUE_NUMBER: String(context.resourceScope?.issueNumber ?? ""),
+      AUTO_DEV_PR_NUMBER: String(context.resourceScope?.prNumber ?? ""),
       // When running in a devcontainer, inject the TCP decision server address
       // so agents can call `auto-dev request-decision` via TCP instead of Unix socket.
       // Also expose the auto-dev CLI on PATH so agents can call it.
       ...(context.containerId
         ? {
-            AUTO_DEV_DECISION_HOST:
-              context.decisionHost ?? "host.docker.internal",
-            AUTO_DEV_DECISION_PORT: String(context.decisionPort ?? 3000),
-            PATH: "/var/run/auto-dev:/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-          }
+          AUTO_DEV_DECISION_HOST:
+            context.decisionHost ?? "host.docker.internal",
+          AUTO_DEV_DECISION_PORT: String(context.decisionPort ?? 3000),
+          PATH: "/var/run/auto-dev:/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        }
         : {}),
       // Pass the workflow run ID so agents can call `auto-dev request-decision`.
       ...(context.workflowRunId
@@ -95,9 +128,9 @@ export class ClaudeCodeAdapter implements AgentInvoker {
         : {}),
       ...(permissionMode
         ? {
-            AUTO_DEV_PERMISSION_MODE: permissionMode,
-            CLAUDE_CODE_PERMISSION_MODE: permissionMode,
-          }
+          AUTO_DEV_PERMISSION_MODE: permissionMode,
+          CLAUDE_CODE_PERMISSION_MODE: permissionMode,
+        }
         : {}),
     };
 
