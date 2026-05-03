@@ -144,15 +144,15 @@ export const renderCompletionComment = (
     "",
     ...(changedFiles
       ? [
-        "<details>",
-        "<summary>Changed Files</summary>",
-        "",
-        "```",
-        changedFiles,
-        "```",
-        "",
-        "</details>",
-      ]
+          "<details>",
+          "<summary>Changed Files</summary>",
+          "",
+          "```",
+          changedFiles,
+          "```",
+          "",
+          "</details>",
+        ]
       : []),
   ].join("\n");
 

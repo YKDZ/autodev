@@ -60,9 +60,13 @@ export class GitManager {
     const authedUrl = `https://x-access-token:${token}@github.com/${this.repoFullName}.git`;
     if (!existsSync(resolve(this.workspaceRoot, ".git"))) {
       logger.info("[auto-dev] Cloning repository...");
-      execFileSync("git", ["clone", authedUrl, this.workspaceRoot, "--depth=1"], {
-        stdio: "pipe",
-      });
+      execFileSync(
+        "git",
+        ["clone", authedUrl, this.workspaceRoot, "--depth=1"],
+        {
+          stdio: "pipe",
+        },
+      );
     } else {
       logger.info("[auto-dev] Fetching origin/main...");
       // Always update remote URL with current token (token rotates each hour)
@@ -299,13 +303,13 @@ export class GitManager {
         const observedRemoteSha = this.getRemoteHead(branch);
         const pushArgs = observedRemoteSha
           ? [
-            "push",
-            "--no-verify",
-            `--force-with-lease=refs/heads/${branch}:${observedRemoteSha}`,
-            "-u",
-            "origin",
-            `${branch}:${branch}`,
-          ]
+              "push",
+              "--no-verify",
+              `--force-with-lease=refs/heads/${branch}:${observedRemoteSha}`,
+              "-u",
+              "origin",
+              `${branch}:${branch}`,
+            ]
           : ["push", "--no-verify", "-u", "origin", `${branch}:${branch}`];
 
         gitWithAuth(pushArgs, dir, {
@@ -344,12 +348,12 @@ export class GitManager {
         const observedRemoteSha = this.getRemoteHead(branch);
         const pushArgs = observedRemoteSha
           ? [
-            "push",
-            "--no-verify",
-            `--force-with-lease=refs/heads/${branch}:${observedRemoteSha}`,
-            "origin",
-            `${branch}:${branch}`,
-          ]
+              "push",
+              "--no-verify",
+              `--force-with-lease=refs/heads/${branch}:${observedRemoteSha}`,
+              "origin",
+              `${branch}:${branch}`,
+            ]
           : ["push", "--no-verify", "origin", `${branch}:${branch}`];
 
         gitWithAuth(pushArgs, worktreePath);
@@ -377,7 +381,7 @@ export class GitManager {
     if (mergeBase !== mainHead) {
       throw new Error(
         `Branch ${branch} was NOT created from current origin/main.\n` +
-        `  merge-base: ${mergeBase.slice(0, 8)}\n  origin/main: ${mainHead.slice(0, 8)}`,
+          `  merge-base: ${mergeBase.slice(0, 8)}\n  origin/main: ${mainHead.slice(0, 8)}`,
       );
     }
     return { branch, mergeBase };

@@ -167,7 +167,9 @@ export class DecisionManager {
 
     if (decision.status === "resolved") {
       const run = loadWorkflowRun(this.workspaceRoot, decision.workflowRunId);
-      const remaining = run ? this.resolveDecisionLimit(run) - run.decisionCount : 0;
+      const remaining = run
+        ? this.resolveDecisionLimit(run) - run.decisionCount
+        : 0;
       return {
         decisionId: decision.id,
         title: decision.title,
@@ -232,7 +234,9 @@ export class DecisionManager {
     if (!decision || decision.status !== "resolved") return null;
 
     const run = loadWorkflowRun(this.workspaceRoot, decision.workflowRunId);
-    const remaining = run ? this.resolveDecisionLimit(run) - run.decisionCount : 0;
+    const remaining = run
+      ? this.resolveDecisionLimit(run) - run.decisionCount
+      : 0;
 
     return {
       decisionId: decision.id,

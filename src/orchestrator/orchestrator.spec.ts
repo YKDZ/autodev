@@ -60,7 +60,9 @@ vi.mock("../workspace-manager/index.js", () => ({
     }
 
     // oxlint-disable-next-line no-empty-function
-    async destroy() { return undefined; }
+    async destroy() {
+      return undefined;
+    }
   },
 }));
 

@@ -212,14 +212,16 @@ export class DecisionSocketServer {
     if (expectedToken) {
       const receivedToken =
         parsed !== null &&
-          typeof parsed === "object" &&
-          "token" in parsed &&
-          typeof (parsed as Record<string, unknown>).token === "string"
-          // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-          ? ((parsed as Record<string, unknown>).token as string)
+        typeof parsed === "object" &&
+        "token" in parsed &&
+        typeof (parsed as Record<string, unknown>).token === "string"
+          ? // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+            ((parsed as Record<string, unknown>).token as string)
           : "";
       if (receivedToken !== expectedToken) {
-        socket.write(JSON.stringify({ error: "Unauthorized decision request" }) + "\n");
+        socket.write(
+          JSON.stringify({ error: "Unauthorized decision request" }) + "\n",
+        );
         socket.end();
         return { buffer, decisionId };
       }

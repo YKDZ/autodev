@@ -54,7 +54,6 @@ import { loadConfig } from "../config/loader.js";
 import { DecisionManager } from "../decision-service/decision-manager.js";
 import { DecisionSocketServer } from "../decision-service/socket-server.js";
 import { PRManager } from "../pr-manager/index.js";
-import { WorkspaceManager } from "../workspace-manager/index.js";
 import {
   EventQueue,
   GithubWebhookHandler,
@@ -65,6 +64,7 @@ import {
   resolveInsecureLocal,
   type WebhookHandlerContext,
 } from "../webhook/index.js";
+import { WorkspaceManager } from "../workspace-manager/index.js";
 import { WorkflowManager } from "./workflow-manager.js";
 
 /** Returns the TCP port for the decision server.
@@ -201,7 +201,7 @@ export class Orchestrator {
                 context: d.context,
               })),
               (run.maxDecisions ?? this.config!.maxDecisionPerRun) -
-              run.decisionCount,
+                run.decisionCount,
             );
             const targetNumber = run.prNumber ?? run.issueNumber;
             try {
@@ -443,7 +443,9 @@ export class Orchestrator {
     try {
       const deleted = await cleanupProcessedEvents(this.workspaceRoot, 30);
       if (deleted > 0) {
-        logger.info(`[auto-dev] Cleaned ${deleted} old processed comment cursor(s)`);
+        logger.info(
+          `[auto-dev] Cleaned ${deleted} old processed comment cursor(s)`,
+        );
       }
     } catch {
       /* best-effort */
@@ -512,7 +514,17 @@ export class Orchestrator {
       const issues = listIssues(this.repoFullName, "auto-dev:ready");
       const claimedIssues = new Set(
         listWorkflowRuns(this.workspaceRoot)
-          .filter((r) => !["completed", "failed", "cancelled", "abandoned", "cleaned", "stale"].includes(r.status))
+          .filter(
+            (r) =>
+              ![
+                "completed",
+                "failed",
+                "cancelled",
+                "abandoned",
+                "cleaned",
+                "stale",
+              ].includes(r.status),
+          )
           .map((r) => r.issueNumber),
       );
 
@@ -568,7 +580,10 @@ export class Orchestrator {
         // Fetch fresh issue state before claiming
         // oxlint-disable-next-line no-await-in-loop
         const issue = getIssue(this.repoFullName, candidate.issueNumber);
-        const issueState = getIssueState(this.repoFullName, candidate.issueNumber);
+        const issueState = getIssueState(
+          this.repoFullName,
+          candidate.issueNumber,
+        );
         if (issueState !== "open") {
           updateReadyIssueCandidateStatus(
             this.workspaceRoot,
@@ -642,7 +657,14 @@ export class Orchestrator {
     const existingRun = listWorkflowRuns(this.workspaceRoot).find(
       (r) =>
         r.issueNumber === issueNumber &&
-        !["completed", "failed", "cancelled", "abandoned", "cleaned", "stale"].includes(r.status),
+        ![
+          "completed",
+          "failed",
+          "cancelled",
+          "abandoned",
+          "cleaned",
+          "stale",
+        ].includes(r.status),
     );
     if (existingRun) {
       logger.info(
@@ -678,7 +700,9 @@ export class Orchestrator {
         ? bodyFm.agent
         : this.config!.defaultAgent;
     const agentModel =
-      bodyFm?.model ?? this.config!.agents[agentDefinition]?.defaultModel ?? null;
+      bodyFm?.model ??
+      this.config!.agents[agentDefinition]?.defaultModel ??
+      null;
 
     const result: import("@/shared/types.js").PollResult = {
       issueNumber,
@@ -710,7 +734,14 @@ export class Orchestrator {
 
     const handler = "issue_trigger";
     const commentIdStr = String(commentId);
-    if (isEventProcessedV2(this.workspaceRoot, handler, commentIdStr, resourceVersion)) {
+    if (
+      isEventProcessedV2(
+        this.workspaceRoot,
+        handler,
+        commentIdStr,
+        resourceVersion,
+      )
+    ) {
       return;
     }
 
@@ -758,13 +789,22 @@ export class Orchestrator {
 
     const handler = "pr_trigger";
     const commentIdStr = String(commentId);
-    if (isEventProcessedV2(this.workspaceRoot, handler, commentIdStr, resourceVersion)) {
+    if (
+      isEventProcessedV2(
+        this.workspaceRoot,
+        handler,
+        commentIdStr,
+        resourceVersion,
+      )
+    ) {
       return;
     }
 
     const match = commentBody.match(/@autodev\b/i);
     if (!match) return;
-    const instruction = commentBody.slice(match.index! + "@autodev".length).trim();
+    const instruction = commentBody
+      .slice(match.index! + "@autodev".length)
+      .trim();
     if (!instruction) return;
 
     const runs = this.workflowManager!.listAll();
@@ -806,14 +846,28 @@ export class Orchestrator {
         : "pr_decision_resolution";
     const commentIdStr = String(commentId);
 
-    if (isEventProcessedV2(this.workspaceRoot, handler, commentIdStr, resourceVersion)) {
+    if (
+      isEventProcessedV2(
+        this.workspaceRoot,
+        handler,
+        commentIdStr,
+        resourceVersion,
+      )
+    ) {
       return;
     }
 
     // Find active run for this issue/PR number
     const allRuns = listWorkflowRuns(this.workspaceRoot).filter(
       (r) =>
-        !["completed", "failed", "cancelled", "abandoned", "cleaned", "stale"].includes(r.status),
+        ![
+          "completed",
+          "failed",
+          "cancelled",
+          "abandoned",
+          "cleaned",
+          "stale",
+        ].includes(r.status),
     );
     const run = allRuns.find(
       (r) =>
@@ -1039,11 +1093,12 @@ export class Orchestrator {
 
     // Commit + push
     try {
-      const pushMeta = await this.workspaceManager!.getGitManager().commitAndPush(
-        run.branch,
-        `chore: auto-dev init for issue #${run.issueNumber}`,
-        workspaceInfo.worktreePath,
-      );
+      const pushMeta =
+        await this.workspaceManager!.getGitManager().commitAndPush(
+          run.branch,
+          `chore: auto-dev init for issue #${run.issueNumber}`,
+          workspaceInfo.worktreePath,
+        );
       run.lastPushedSha = pushMeta.pushedSha;
       run.lastObservedRemoteSha = pushMeta.observedRemoteSha;
       run.updatedAt = new Date().toISOString();
@@ -1250,10 +1305,10 @@ export class Orchestrator {
           const pushFn =
             workspaceInfo && run.branch
               ? async () =>
-                this.workspaceManager!.getGitManager().tryPush(
-                  run.branch,
-                  workspaceInfo.worktreePath,
-                )
+                  this.workspaceManager!.getGitManager().tryPush(
+                    run.branch,
+                    workspaceInfo.worktreePath,
+                  )
               : null;
 
           if (prNumber) {
@@ -1369,7 +1424,9 @@ export class Orchestrator {
     ].join("\n");
   }
 
-  private async hydrateIssueContextIfMissing(run: WorkflowRun): Promise<WorkflowRun> {
+  private async hydrateIssueContextIfMissing(
+    run: WorkflowRun,
+  ): Promise<WorkflowRun> {
     if (run.issueTitle.trim() && run.issueBody.trim()) {
       return run;
     }

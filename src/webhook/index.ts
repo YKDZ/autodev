@@ -1,9 +1,9 @@
 export { GithubWebhookServer } from "./github-webhook-server.js";
 export {
-    resolveWebhookPort,
-    resolveWebhookPath,
-    resolveWebhookSecret,
-    resolveInsecureLocal,
+  resolveWebhookPort,
+  resolveWebhookPath,
+  resolveWebhookSecret,
+  resolveInsecureLocal,
 } from "./github-webhook-server.js";
 export { EventQueue } from "./event-queue.js";
 export { GithubWebhookHandler } from "./github-webhook-handler.js";

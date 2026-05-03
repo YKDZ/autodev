@@ -47,9 +47,7 @@ const normalizeOptions = (
       };
     })
     .filter(
-      (
-        option,
-      ): option is { key: string; label: string; description: string } =>
+      (option): option is { key: string; label: string; description: string } =>
         option !== null,
     );
 
@@ -60,12 +58,12 @@ const queryResolution = async (
   token: string,
 ): Promise<
   | {
-    resolved: false;
-  }
+      resolved: false;
+    }
   | {
-    resolved: true;
-    response: Record<string, unknown>;
-  }
+      resolved: true;
+      response: Record<string, unknown>;
+    }
 > => {
   const socket = createConnection(port, host);
 
@@ -150,7 +148,8 @@ export const runRequestDecisions = async (args: string[]): Promise<void> => {
   }
 
   const socket = createConnection(port, host);
-  const payload = JSON.stringify({ batch: decisions, ...(token ? { token } : {}) }) + "\n";
+  const payload =
+    JSON.stringify({ batch: decisions, ...(token ? { token } : {}) }) + "\n";
 
   await new Promise<void>((resolve, reject) => {
     socket.on("connect", () => {
@@ -174,13 +173,13 @@ export const runRequestDecisions = async (args: string[]): Promise<void> => {
         const response =
           parsed !== null && typeof parsed === "object"
             ? (parsed as {
-              results?: Array<{
-                accepted: boolean;
-                id: string;
-                alias: string;
-                reason?: string;
-              }>;
-            })
+                results?: Array<{
+                  accepted: boolean;
+                  id: string;
+                  alias: string;
+                  reason?: string;
+                }>;
+              })
             : { results: [] };
 
         if (!shouldWait) {
@@ -210,12 +209,26 @@ export const runRequestDecisions = async (args: string[]): Promise<void> => {
             const ids = [...pending.values()];
             for (const decisionId of ids) {
               // oxlint-disable-next-line no-await-in-loop
-              const status = await queryResolution(host, port, decisionId, token);
+              const status = await queryResolution(
+                host,
+                port,
+                decisionId,
+                token,
+              );
               if (status.resolved) {
                 resolved.push({
-                  decisionId: typeof status.response.decisionId === "string" ? status.response.decisionId : decisionId,
-                  resolution: typeof status.response.resolution === "string" ? status.response.resolution : "",
-                  resolvedBy: typeof status.response.resolvedBy === "string" ? status.response.resolvedBy : "",
+                  decisionId:
+                    typeof status.response.decisionId === "string"
+                      ? status.response.decisionId
+                      : decisionId,
+                  resolution:
+                    typeof status.response.resolution === "string"
+                      ? status.response.resolution
+                      : "",
+                  resolvedBy:
+                    typeof status.response.resolvedBy === "string"
+                      ? status.response.resolvedBy
+                      : "",
                   remainingDecisions: Number(
                     status.response.remainingDecisions ?? 0,
                   ),

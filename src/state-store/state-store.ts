@@ -69,7 +69,11 @@ const withDbTx = (db: DatabaseSync, fn: () => void): void => {
   }
 };
 
-const hasColumn = (db: DatabaseSync, table: string, column: string): boolean => {
+const hasColumn = (
+  db: DatabaseSync,
+  table: string,
+  column: string,
+): boolean => {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
     name: string;
   }>;
@@ -176,8 +180,18 @@ const initSchema = (db: DatabaseSync): void => {
 
   if (!hasMigration(db, 2)) {
     withDbTx(db, () => {
-      ensureColumn(db, "workflow_runs", "issue_title", "TEXT NOT NULL DEFAULT ''");
-      ensureColumn(db, "workflow_runs", "issue_body", "TEXT NOT NULL DEFAULT ''");
+      ensureColumn(
+        db,
+        "workflow_runs",
+        "issue_title",
+        "TEXT NOT NULL DEFAULT ''",
+      );
+      ensureColumn(
+        db,
+        "workflow_runs",
+        "issue_body",
+        "TEXT NOT NULL DEFAULT ''",
+      );
       ensureColumn(
         db,
         "workflow_runs",

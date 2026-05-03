@@ -326,7 +326,10 @@ export const submitPRReview = (
 };
 
 /** Get the state of an issue. Always returns lowercase: "open" or "closed". */
-export const getIssueState = (repo: string, issueNumber: number): "open" | "closed" => {
+export const getIssueState = (
+  repo: string,
+  issueNumber: number,
+): "open" | "closed" => {
   const output = gh([
     "issue",
     "view",
