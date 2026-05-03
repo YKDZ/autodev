@@ -8,4 +8,5 @@ todo
 autodev-data
 docker-compose.test.yml
 tools
+.env
 .claude/skills/real-test
