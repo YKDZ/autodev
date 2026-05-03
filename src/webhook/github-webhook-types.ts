@@ -30,7 +30,7 @@ const GithubIssueSchema = z.object({
         .object({
             url: z.string().optional(),
         })
-        .optional(),
+        .nullish(),
 });
 
 const GithubCommentSchema = z.object({
